@@ -3,11 +3,28 @@
 const axios = require('axios');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
-const DOMAIN = (process.env.MOVIX_DOMAIN || '')
-  .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
-const API = `https://api.${DOMAIN}/api`;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
-const HEADERS = { 'User-Agent': UA, Origin: `https://${DOMAIN}`, Referer: `https://${DOMAIN}/` };
+
+const cleanDomain = (u) => String(u || '').trim()
+  .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+
+// Comme MovixHelper.updatemainurl() du Kotlin : le domaine actif est publié dans address.json.
+let cachedDomain = { value: null, at: 0 };
+async function getDomain() {
+  if (cachedDomain.value && Date.now() - cachedDomain.at < 6 * 3600 * 1000) return cachedDomain.value;
+  try {
+    const { data } = await axios.get('https://movix.online/address.json', { timeout: 8000, headers: { 'User-Agent': UA } });
+    const url = data && data.active && data.active[0] && data.active[0].url;
+    if (url) {
+      cachedDomain = { value: cleanDomain(url), at: Date.now() };
+      console.log('Movix domaine actif :', cachedDomain.value);
+      return cachedDomain.value;
+    }
+  } catch (e) {
+    console.log('Movix : address.json inaccessible (' + (e.code || e.message) + ')');
+  }
+  return cachedDomain.value || cleanDomain(process.env.MOVIX_DOMAIN); // repli manuel
+}
 
 const tmdbCache = new Map();
 
@@ -23,7 +40,7 @@ async function toTmdbId(imdb, type) {
   return tmdb;
 }
 
-function endpoints(type, id, imdb, s, e) {
+function endpoints(API, type, id, imdb, s, e) {
   const q = `?season=${s}&episode=${e}`;
   if (type === 'movie') {
     return [
@@ -66,17 +83,24 @@ function extractUrls(data) {
 }
 
 async function stream(id, type) {
-  if (!TMDB_KEY || !DOMAIN) {
-    console.error('Movix: définissez TMDB_API_KEY et MOVIX_DOMAIN');
+  if (!TMDB_KEY) {
+    console.error('Movix: définissez TMDB_API_KEY');
     return [];
   }
+  const DOMAIN = await getDomain();
+  if (!DOMAIN) {
+    console.error('Movix: domaine introuvable (address.json KO et MOVIX_DOMAIN vide)');
+    return [];
+  }
+  const API = `https://api.${DOMAIN}/api`;
+  const HEADERS = { 'User-Agent': UA, Origin: `https://${DOMAIN}`, Referer: `https://${DOMAIN}/` };
   const [imdb, s = '1', e = '1'] = id.split(':');
   const kind = type === 'movie' ? 'movie' : 'tv';
   const tmdb = await toTmdbId(imdb, kind);
   if (!tmdb) return [];
 
   const results = await Promise.allSettled(
-    endpoints(kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
+    endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
       try {
         const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
         const urls = extractUrls(res.data);
