@@ -194,8 +194,8 @@ async function stream(id) {
   const ytLinks = streams.filter((x) => x.ytId);
   const directLinks = streams.filter((x) => x.url);
   const browserLinks = streams.filter((x) => x.externalUrl);
-  // YouTube et liens directs toujours affichés ; les liens "navigateur" seulement s'il n'y a pas de lien direct.
-  const showBrowser = !directLinks.length || process.env.SHOW_BROWSER_LINKS;
+  // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
+  const showBrowser = process.env.SHOW_BROWSER_LINKS;
   return [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
 }
 
