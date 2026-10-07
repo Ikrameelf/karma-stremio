@@ -43,25 +43,47 @@ function candidates(text, pageUrl) {
   return [...out];
 }
 
+// Doodstream : la page publie un chemin /pass_md5/... qui donne la base du lien vidéo.
+const DOOD = /(^|\.)(dood|d0o0d|d000d|ds2play|doodstream|dooood|dsvplay)[\w-]*\./i;
+async function resolveDood(url) {
+  const u = new URL(url);
+  const embed = `${u.origin}/e/${u.pathname.split('/').filter(Boolean).pop()}`;
+  const { data: html } = await axios.get(embed, { timeout: 7000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
+  const md5 = String(html).match(/\/pass_md5\/[^'"]+/);
+  if (!md5) return [];
+  const token = md5[0].split('/').pop();
+  const { data: base } = await axios.get(u.origin + md5[0], { timeout: 7000, responseType: 'text', headers: { 'User-Agent': UA, Referer: embed } });
+  if (!/^https?:/.test(String(base))) return [];
+  const rand = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('');
+  return [{ url: `${String(base).trim()}${rand}?token=${token}&expiry=${Date.now()}`, kind: 'MP4', headers: { Referer: u.origin + '/', 'User-Agent': UA } }];
+}
+
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
 async function resolveEmbed(url, referer) {
   let origin;
   try { origin = new URL(url).origin; } catch { return []; }
   try {
+    if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
     const { data } = await axios.get(url, {
       timeout: 7000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
     const html = typeof data === 'string' ? data : JSON.stringify(data);
-    return candidates(html + '\n' + unpackAll(html), url)
+    const found = candidates(html + '\n' + unpackAll(html), url);
+    if (!found.length) console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
+    return found
       .slice(0, 3)
       .map((u) => ({
         url: u,
         kind: /\.m3u8/i.test(u) ? 'HLS' : 'MP4',
         headers: { Referer: origin + '/', 'User-Agent': UA },
       }));
-  } catch {
+  } catch (err) {
+    const why = err.response
+      ? `HTTP ${err.response.status} (serveur : ${err.response.headers['server'] || '?'})`
+      : err.code || err.message;
+    console.log(`  ↳ ${origin} : ÉCHEC ${why}`);
     return [];
   }
 }
