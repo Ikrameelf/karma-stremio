@@ -174,7 +174,8 @@ async function stream(id) {
     if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
     else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
   }
-  return streams;
+  const playableLinks = streams.filter((x) => x.url);
+  return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : streams;
 }
 
 module.exports = {
