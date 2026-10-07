@@ -1,6 +1,8 @@
 // Port Stremio du provider CloudStream "YoTurkish" (Cs-Karma).
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { resolveEmbed } = require('./extractors');
+const { playable } = require('./proxy');
 
 const BASE = 'https://yoturkish.to';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -91,16 +93,13 @@ async function meta(id) {
 }
 
 // ---------- Streams ----------
-function directStream(url, label) {
-  return {
+function directStream(url, label, headers) {
+  return playable({
     name: 'YoTurkish',
     title: label,
     url,
-    behaviorHints: {
-      notWebReady: true,
-      proxyHeaders: { request: { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA } },
-    },
-  };
+    headers: headers || { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA },
+  });
 }
 
 function collectStatic(html) {
@@ -149,18 +148,6 @@ async function collectWithBrowser(url) {
   }
 }
 
-// Tente d'extraire un lien vidéo direct d'une page d'embed.
-async function resolveEmbed(embedUrl, referer) {
-  try {
-    const html = await getHtml(embedUrl, { Referer: referer });
-    const hls = html.match(HLS_RE);
-    if (hls) return { url: hls[0], kind: 'HLS' };
-    const mp4 = html.match(MP4_RE);
-    if (mp4) return { url: mp4[0], kind: 'MP4' };
-  } catch { /* hôte protégé ou indisponible */ }
-  return null;
-}
-
 async function stream(id) {
   const epUrl = BASE + dec(id.slice('yot:ep:'.length));
   const html = await getHtml(epUrl);
@@ -183,8 +170,8 @@ async function stream(id) {
       streams.push(directStream(url, 'Direct (HLS)'));
       continue;
     }
-    const direct = await resolveEmbed(url, epUrl);
-    if (direct) streams.push(directStream(direct.url, `Direct (${direct.kind})`));
+    const links = await resolveEmbed(url, epUrl);
+    if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
     else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
   }
   return streams;
