@@ -106,7 +106,7 @@ function parseJ1F(data) {
   return { urls, direct: [] };
 }
 
-async function stream(id, type) {
+async function streamFull(id, type) {
   if (!TMDB_KEY) {
     console.error('Movix: définissez TMDB_API_KEY');
     return [];
@@ -126,7 +126,7 @@ async function stream(id, type) {
   const results = await Promise.allSettled(
     endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
       try {
-        const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
+        const res = await axios.get(url, { headers: HEADERS, timeout: 8000, validateStatus: (c) => c < 400 });
         let parsed;
         if (brand === 'Purstream') parsed = parsePurstream(res.data);
         else if (brand === 'J1F') parsed = parseJ1F(res.data);
@@ -169,7 +169,7 @@ async function stream(id, type) {
 
   // Tente d'extraire un lien vidéo de chaque page d'embed (en parallèle, limité pour rester rapide).
   const resolved = await Promise.all(
-    embeds.slice(0, 15).map(async ({ brand, url }) => {
+    embeds.slice(0, 10).map(async ({ brand, url }) => {
       const host = new URL(url).hostname.replace(/^www\./, '');
       const links = await resolveEmbed(url, HEADERS.Referer);
       console.log(`Movix embed ${host}: ${links.length} lien(s) vidéo`);
@@ -178,12 +178,27 @@ async function stream(id, type) {
         : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
     })
   );
-  const extra = embeds.slice(15).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
+  const extra = embeds.slice(10).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
   const all = [...direct, ...resolved.flat(), ...extra];
   const playableLinks = all.filter((x) => x.url);
   const browserLinks = all.filter((x) => !x.url);
   // Les liens "navigateur" ne sont gardés que s'il n'y a rien de lisible (ou si SHOW_BROWSER_LINKS=1).
   return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : [...playableLinks, ...browserLinks];
+}
+
+// Cache de 10 min : une 2e ouverture du même titre est instantanée, même si la 1re a expiré côté Stremio.
+const cache = new Map();
+function stream(id, type) {
+  let e = cache.get(id);
+  if (!e || Date.now() - e.at > 10 * 60 * 1000) {
+    e = { at: Date.now(), value: null };
+    e.promise = streamFull(id, type)
+      .then((v) => { e.value = v; return v; })
+      .catch((err) => { cache.delete(id); throw err; });
+    cache.set(id, e);
+    if (cache.size > 200) cache.delete(cache.keys().next().value);
+  }
+  return e.value ? Promise.resolve(e.value) : e.promise;
 }
 
 module.exports = {
