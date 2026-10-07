@@ -165,7 +165,7 @@ async function processCandidates(candidates, epUrl, streams, seen) {
 
     let links = [];
     try {
-      links = await resolveEmbed(url, epUrl);
+      links = await resolveEmbed(url, epUrl, { sniff: !streams.some((x) => x.url) });
     } catch (e) {
       console.error('[yot] erreur resolveEmbed :', url, e.message);
     }
