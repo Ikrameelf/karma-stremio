@@ -77,8 +77,16 @@ async function stream(id, type) {
 
   const results = await Promise.allSettled(
     endpoints(kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
-      const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
-      return { brand, urls: extractUrls(res.data) };
+      try {
+        const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
+        const urls = extractUrls(res.data);
+        console.log(`Movix ${brand}: HTTP ${res.status}, ${urls.length} lien(s)`);
+        return { brand, urls };
+      } catch (err) {
+        const code = err.response ? `HTTP ${err.response.status}` : err.code || err.message;
+        console.log(`Movix ${brand}: ÉCHEC (${code}) ${url}`);
+        throw err;
+      }
     })
   );
 
