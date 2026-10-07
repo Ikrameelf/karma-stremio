@@ -196,7 +196,7 @@ function stream(id, type) {
       .then((v) => { if (v.length) e.value = v; else cache.delete(id); return v; }) // un résultat vide n'est jamais mis en cache
       .catch((err) => { cache.delete(id); throw err; });
     cache.set(id, e);
-    if (cache.size > 200) cache.delete(cache.keys().next().value);
+    if (cache.size > 50) cache.delete(cache.keys().next().value);
   }
   return e.value ? Promise.resolve(e.value) : e.promise;
 }
