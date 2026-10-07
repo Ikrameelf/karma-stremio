@@ -1,7 +1,7 @@
 {
   "name": "karma-stremio",
-  "version": "1.0.0",
-  "description": "Addon Stremio inspir\u00e9 de Cs-Karma (YoTurkish)",
+  "version": "1.1.0",
+  "description": "Port Stremio de providers Cs-Karma (YoTurkish, Movix).",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,9 +10,10 @@
     "node": ">=18"
   },
   "dependencies": {
-    "axios": "^1.7.0",
+    "axios": "^1.7.7",
     "cheerio": "^1.0.0",
     "express": "^4.19.2",
+    "playwright": "^1.48.0",
     "stremio-addon-sdk": "^1.6.10"
   }
 }
