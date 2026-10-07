@@ -84,6 +84,28 @@ function extractUrls(data) {
   return [...new Set(text.match(/https?:\/\/[^"'\s\\<>]+/g) || [])].filter((u) => !NOISE.test(u));
 }
 
+const asJson = (d) => { if (typeof d !== 'string') return d; try { return JSON.parse(d); } catch { return null; } };
+
+// Purstream : le Kotlin prend la DERNIÈRE source et utilise l'URL du flux comme Referer.
+function parsePurstream(data) {
+  const j = asJson(data);
+  const src = j && Array.isArray(j.sources) ? j.sources[j.sources.length - 1] : null;
+  if (!src || !src.url) return { urls: [], direct: [] };
+  return { urls: [], direct: [{ url: src.url, title: src.name || 'M3U8', headers: { Referer: src.url } }] };
+}
+
+// J1F : les liens sont soit en clair, soit encodés en base64.
+function parseJ1F(data) {
+  const j = asJson(data);
+  const players = (j && j.players) || {};
+  const urls = [...(players.vf || []), ...(players.vostfr || [])]
+    .map((x) => String((x && x.url) || '').trim())
+    .filter(Boolean)
+    .map((u) => (/^https?:/i.test(u) ? u : Buffer.from(u, 'base64').toString('utf8').trim()))
+    .filter((u) => /^https?:/i.test(u));
+  return { urls, direct: [] };
+}
+
 async function stream(id, type) {
   if (!TMDB_KEY) {
     console.error('Movix: définissez TMDB_API_KEY');
@@ -105,9 +127,12 @@ async function stream(id, type) {
     endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
       try {
         const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
-        const urls = extractUrls(res.data);
-        console.log(`Movix ${brand}: HTTP ${res.status}, ${urls.length} lien(s)`);
-        return { brand, urls };
+        let parsed;
+        if (brand === 'Purstream') parsed = parsePurstream(res.data);
+        else if (brand === 'J1F') parsed = parseJ1F(res.data);
+        else parsed = { urls: extractUrls(res.data), direct: [] };
+        console.log(`Movix ${brand}: HTTP ${res.status}, ${parsed.urls.length + parsed.direct.length} lien(s)`);
+        return { brand, urls: parsed.urls, direct: parsed.direct };
       } catch (err) {
         const code = err.response ? `HTTP ${err.response.status}` : err.code || err.message;
         console.log(`Movix ${brand}: ÉCHEC (${code}) ${url}`);
@@ -121,6 +146,11 @@ async function stream(id, type) {
   const embeds = [];
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
+    for (const d of r.value.direct) {
+      if (seen.has(d.url)) continue;
+      seen.add(d.url);
+      direct.push(playable({ name: `Movix ${r.value.brand}`, title: d.title, url: d.url, headers: d.headers }));
+    }
     for (const url of r.value.urls) {
       if (seen.has(url)) continue;
       seen.add(url);
