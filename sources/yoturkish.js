@@ -154,7 +154,13 @@ async function stream(id) {
   const epUrl = BASE + dec(parts[2]);
   const seriesPath = parts[3] ? dec(parts[3]) : null;
   const epNum = parseInt(parts[4], 10) || null;
-  const html = await getHtml(epUrl);
+  let html;
+  try {
+    html = await getHtml(epUrl);
+  } catch (e) {
+    console.log(`YoTurkish ${epUrl} : page inaccessible (${e.response ? 'HTTP ' + e.response.status + ', serveur : ' + (e.response.headers['server'] || '?') : e.code || e.message})`);
+    throw e;
+  }
 
   let candidates = collectStatic(html);
   if (!candidates.length || process.env.FORCE_BROWSER) {
@@ -184,6 +190,7 @@ async function stream(id) {
     if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
     else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
   }
+  console.log(`YoTurkish ${epUrl} : ${candidates.length} lecteur(s) trouvé(s), ${streams.filter((x) => x.ytId).length} YouTube, ${streams.filter((x) => x.url).length} direct(s), ${streams.filter((x) => x.externalUrl).length} navigateur`);
   const ytLinks = streams.filter((x) => x.ytId);
   const directLinks = streams.filter((x) => x.url);
   const browserLinks = streams.filter((x) => x.externalUrl);
