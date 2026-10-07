@@ -94,8 +94,7 @@ async function tryXfs(url, html, referer) {
   }));
   const ok = results.find(Boolean);
   if (!ok) {
-    await probeDownload(html, url);
-    return [];
+    return xfsDownload(html, url);
   }
   const origin = new URL(ok.t).origin;
   return ok.f.slice(0, 3).map((link) => ({
@@ -105,22 +104,50 @@ async function tryXfs(url, html, referer) {
   }));
 }
 
-// Diagnostic : ouvre le lien de téléchargement proposé par la page (HD de préférence) et journalise ce qu'il contient.
-async function probeDownload(html, pageUrl) {
+// Pages XFileSharing : le lien "Download" mène à un formulaire (op=download_orig) dont l'envoi donne le fichier mp4.
+// Le lien obtenu est lié à l'adresse IP qui a envoyé le formulaire : c'est pourquoi il doit passer par le relais.
+async function xfsDownload(html, pageUrl) {
   const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
-  const dl = links.find((l) => /_h$/.test(l)) || links[0];
-  if (!dl) return;
-  try {
-    const r = await axios.get(dl, {
-      timeout: 4000, maxContentLength: 1500000, responseType: 'text', validateStatus: () => true,
-      headers: { 'User-Agent': UA, Referer: pageUrl },
-    });
-    const h = String(r.data);
-    console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : HTTP ${r.status}, ${h.length} octets, serveur ${r.headers.server || '?'}`);
-    console.log(`  ↳ EXTRAIT TÉLÉCHARGEMENT : ${h.replace(/\s+/g, ' ').slice(0, 1800)}`);
-  } catch (e) {
-    console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.code || e.message}`);
+  const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))]; // HD d'abord
+  for (const dl of ordered.slice(0, 2)) {
+    try {
+      const origin = new URL(dl).origin;
+      const page = await axios.get(dl, {
+        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        headers: { 'User-Agent': UA, Referer: pageUrl },
+      });
+      const h = String(page.data);
+      const form = h.match(/<form[^>]*method=["']?post["']?[^>]*>([\s\S]*?)<\/form>/i);
+      if (!form) {
+        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : pas de formulaire`);
+        continue;
+      }
+      const params = new URLSearchParams();
+      for (const m of form[1].matchAll(/<input[^>]+>/gi)) {
+        const name = m[0].match(/name=["']([^"']+)["']/i);
+        const val = m[0].match(/value=["']([^"']*)["']/i);
+        if (name) params.append(name[1], val ? val[1] : '');
+      }
+      const r = await axios.post(dl, params.toString(), {
+        maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text',
+        headers: { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      const body = String(r.data || '');
+      const link = r.headers.location || candidates(body, dl)[0];
+      console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : formulaire envoyé, HTTP ${r.status}, ${link ? 'lien obtenu' : 'pas de lien'}`);
+      if (link) {
+        return [{
+          url: new URL(link, dl).href,
+          kind: 'MP4',
+          headers: { Referer: origin + '/', 'User-Agent': UA },
+        }];
+      }
+      console.log(`  ↳ EXTRAIT RÉPONSE : ${body.replace(/\s+/g, ' ').slice(0, 1500)}`);
+    } catch (e) {
+      console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+    }
   }
+  return [];
 }
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
