@@ -108,7 +108,8 @@ function collectStatic(html) {
   const dl = abs($('.dl-contenti a').first().attr('href'));
   if (dl) found.add(dl);
   $('iframe').each((_, el) => {
-    const s = abs($(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src'));
+    // CORRECT :
+const s = abs($(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src'));
     if (s && /^https?:/.test(s)) found.add(s);
   });
   (html.match(HLS_RE) || []).forEach((u) => found.add(u));
