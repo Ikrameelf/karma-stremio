@@ -1,4 +1,6 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+const express = require('express');
+const { addonBuilder, getRouter } = require('stremio-addon-sdk');
+const proxy = require('./sources/proxy');
 
 // Chaque source exporte { prefix, types, stream } et, en option, { catalogId, catalogName, genres, catalog, meta }.
 const sources = [require('./sources/yoturkish'), require('./sources/movix')];
@@ -48,4 +50,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
   catch (e) { console.error('stream', e.message); return { streams: [] }; }
 });
 
-serveHTTP(builder.getInterface(), { port: Number(process.env.PORT) || 7000 });
+const app = express();
+app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
+app.use('/', getRouter(builder.getInterface()));
+const PORT = Number(process.env.PORT) || 7000;
+app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
