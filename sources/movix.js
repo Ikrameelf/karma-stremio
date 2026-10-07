@@ -180,7 +180,10 @@ async function stream(id, type) {
   );
   const extra = embeds.slice(15).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
   const all = [...direct, ...resolved.flat(), ...extra];
-  return [...all.filter((x) => x.url), ...all.filter((x) => !x.url)];
+  const playableLinks = all.filter((x) => x.url);
+  const browserLinks = all.filter((x) => !x.url);
+  // Les liens "navigateur" ne sont gardés que s'il n'y a rien de lisible (ou si SHOW_BROWSER_LINKS=1).
+  return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : [...playableLinks, ...browserLinks];
 }
 
 module.exports = {
