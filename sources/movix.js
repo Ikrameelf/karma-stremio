@@ -1,6 +1,7 @@
 // Port Stremio du provider CloudStream "Movix" (Cs-Karma) : addon de STREAMS uniquement.
 // Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
 const axios = require('axios');
+const { resolveEmbed } = require('./extractors');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
@@ -133,11 +134,29 @@ async function stream(id, type) {
           },
         });
       } else if (!url.includes(`api.${DOMAIN}`)) {
-        embeds.push({ name: `Movix ${r.value.brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url });
+        embeds.push({ brand: r.value.brand, url });
       }
     }
   }
-  return [...direct, ...embeds];
+
+  // Tente d'extraire un lien vidéo de chaque page d'embed (en parallèle, limité pour rester rapide).
+  const resolved = await Promise.all(
+    embeds.slice(0, 15).map(async ({ brand, url }) => {
+      const host = new URL(url).hostname.replace(/^www\./, '');
+      const links = await resolveEmbed(url, HEADERS.Referer);
+      return links.length
+        ? links.map((l) => ({
+            name: `Movix ${brand}`,
+            title: `${host} · ${l.kind}`,
+            url: l.url,
+            behaviorHints: { notWebReady: true, proxyHeaders: { request: l.headers } },
+          }))
+        : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
+    })
+  );
+  const extra = embeds.slice(15).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
+  const all = [...direct, ...resolved.flat(), ...extra];
+  return [...all.filter((x) => x.url), ...all.filter((x) => !x.url)];
 }
 
 module.exports = {
