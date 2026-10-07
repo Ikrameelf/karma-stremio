@@ -76,6 +76,8 @@ async function handler(req, res) {
     for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
       if (up.headers[k]) res.set(k, up.headers[k]);
     }
+    up.data.on('error', () => res.destroy());
+    res.on('error', () => up.data.destroy());
     up.data.pipe(res);
     req.on('close', () => up.data.destroy());
   } catch (e) {
