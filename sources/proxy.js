@@ -79,7 +79,7 @@ async function handler(req, res) {
     up.data.pipe(res);
     req.on('close', () => up.data.destroy());
   } catch (e) {
-    console.log('proxy ÉCHEC', e.response ? 'HTTP ' + e.response.status : e.code || e.message, target.slice(0, 120));
+    console.log('proxy ÉCHEC', e.response ? `HTTP ${e.response.status} (serveur : ${e.response.headers['server'] || '?'})` : e.code || e.message, target.slice(0, 120));
     if (!res.headersSent) res.status(502).end();
   }
 }
