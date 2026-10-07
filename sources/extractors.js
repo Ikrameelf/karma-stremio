@@ -117,32 +117,38 @@ async function xfsDownload(html, pageUrl) {
         headers: { 'User-Agent': UA, Referer: pageUrl },
       });
       const h = String(page.data);
-      const form = h.match(/<form[^>]*method=["']?post["']?[^>]*>([\s\S]*?)<\/form>/i);
-      if (!form) {
-        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : pas de formulaire`);
-        continue;
+      const cookie = (page.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+      let current = h;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const form = current.match(/<form[^>]*method=["']?post["']?[^>]*>([\s\S]*?)<\/form>/i);
+        if (!form) {
+          console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : pas de formulaire`);
+          break;
+        }
+        const params = new URLSearchParams();
+        for (const m of form[1].matchAll(/<input[^>]+>/gi)) {
+          const name = m[0].match(/name=["']([^"']+)["']/i);
+          const val = m[0].match(/value=["']([^"']*)["']/i);
+          if (name) params.append(name[1], val ? val[1] : '');
+        }
+        if (attempt > 1) await new Promise((res) => setTimeout(res, 1500));
+        const r = await axios.post(dl, params.toString(), {
+          maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text',
+          headers: { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded', ...(cookie ? { Cookie: cookie } : {}) },
+        });
+        const body = String(r.data || '');
+        const link = r.headers.location || candidates(body, dl)[0];
+        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} (essai ${attempt}) : HTTP ${r.status}, ${link ? 'lien obtenu' : 'pas de lien'}`);
+        if (link) {
+          return [{
+            url: new URL(link, dl).href,
+            kind: 'MP4',
+            headers: { Referer: origin + '/', 'User-Agent': UA },
+          }];
+        }
+        if (attempt === 3) console.log(`  ↳ EXTRAIT RÉPONSE : ${body.replace(/\s+/g, ' ').slice(0, 1500)}`);
+        current = body; // la page d'erreur contient un nouveau formulaire (nouveau hash) : on le renvoie
       }
-      const params = new URLSearchParams();
-      for (const m of form[1].matchAll(/<input[^>]+>/gi)) {
-        const name = m[0].match(/name=["']([^"']+)["']/i);
-        const val = m[0].match(/value=["']([^"']*)["']/i);
-        if (name) params.append(name[1], val ? val[1] : '');
-      }
-      const r = await axios.post(dl, params.toString(), {
-        maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text',
-        headers: { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
-      const body = String(r.data || '');
-      const link = r.headers.location || candidates(body, dl)[0];
-      console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : formulaire envoyé, HTTP ${r.status}, ${link ? 'lien obtenu' : 'pas de lien'}`);
-      if (link) {
-        return [{
-          url: new URL(link, dl).href,
-          kind: 'MP4',
-          headers: { Referer: origin + '/', 'User-Agent': UA },
-        }];
-      }
-      console.log(`  ↳ EXTRAIT RÉPONSE : ${body.replace(/\s+/g, ' ').slice(0, 1500)}`);
     } catch (e) {
       console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
     }
