@@ -2,6 +2,7 @@
 // Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
 const axios = require('axios');
 const { resolveEmbed } = require('./extractors');
+const { playable } = require('./proxy');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
@@ -124,15 +125,12 @@ async function stream(id, type) {
       if (seen.has(url)) continue;
       seen.add(url);
       if (DIRECT.test(url)) {
-        direct.push({
+        direct.push(playable({
           name: `Movix ${r.value.brand}`,
           title: DIRECT.exec(url)[1].toUpperCase(),
           url,
-          behaviorHints: {
-            notWebReady: true,
-            proxyHeaders: { request: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA } },
-          },
-        });
+          headers: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA },
+        }));
       } else if (!url.includes(`api.${DOMAIN}`)) {
         embeds.push({ brand: r.value.brand, url });
       }
@@ -144,13 +142,9 @@ async function stream(id, type) {
     embeds.slice(0, 15).map(async ({ brand, url }) => {
       const host = new URL(url).hostname.replace(/^www\./, '');
       const links = await resolveEmbed(url, HEADERS.Referer);
+      console.log(`Movix embed ${host}: ${links.length} lien(s) vidéo`);
       return links.length
-        ? links.map((l) => ({
-            name: `Movix ${brand}`,
-            title: `${host} · ${l.kind}`,
-            url: l.url,
-            behaviorHints: { notWebReady: true, proxyHeaders: { request: l.headers } },
-          }))
+        ? links.map((l) => playable({ name: `Movix ${brand}`, title: `${host} · ${l.kind}`, url: l.url, headers: l.headers }))
         : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
     })
   );
