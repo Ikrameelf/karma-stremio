@@ -66,7 +66,7 @@ async function resolveDood(url) {
 
 // Pages de téléchargement type XFileSharing (ex. engifuosi.com/d/<code>.html) : on devine l'adresse du lecteur
 // à partir du code du fichier, sur le même site et sur les hôtes cités dans la page (ex. tokvoy.com).
-async function tryXfs(url, html) {
+async function tryXfs(url, html, referer) {
   const u = new URL(url);
   const m = u.pathname.match(/\/(?:d|f|e|v)\/([a-z0-9]{8,})/i);
   if (!m) return [];
@@ -75,13 +75,13 @@ async function tryXfs(url, html) {
   for (const h of String(html).matchAll(/https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\/d\/[a-z0-9]+/gi)) {
     if (!/^(cdnjs|www\.w3)/i.test(h[1])) hosts.add('https://' + h[1]);
   }
-  const paths = [`/f/${code}`, `/e/${code}`, `/embed-${code}.html`, `/v/${code}`, `/${code}`];
+  const paths = [`/e/${code}`, `/v/${code}`, `/embed-${code}.html`];
   const tries = [...hosts].flatMap((h) => paths.map((p) => h + p));
   const results = await Promise.all(tries.map(async (t) => {
     try {
       const { data } = await axios.get(t, {
         timeout: 4000, maxContentLength: 1500000, responseType: 'text',
-        headers: { 'User-Agent': UA, Referer: u.origin + '/' },
+        headers: { 'User-Agent': UA, Referer: referer || u.origin + '/' },
       });
       const h = String(data);
       const f = candidates(h + '\n' + unpackAll(h), t);
@@ -93,13 +93,34 @@ async function tryXfs(url, html) {
     }
   }));
   const ok = results.find(Boolean);
-  if (!ok) return [];
+  if (!ok) {
+    await probeDownload(html, url);
+    return [];
+  }
   const origin = new URL(ok.t).origin;
   return ok.f.slice(0, 3).map((link) => ({
     url: link,
     kind: /\.m3u8/i.test(link) ? 'HLS' : 'MP4',
     headers: { Referer: origin + '/', 'User-Agent': UA },
   }));
+}
+
+// Diagnostic : ouvre le lien de téléchargement proposé par la page (HD de préférence) et journalise ce qu'il contient.
+async function probeDownload(html, pageUrl) {
+  const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
+  const dl = links.find((l) => /_h$/.test(l)) || links[0];
+  if (!dl) return;
+  try {
+    const r = await axios.get(dl, {
+      timeout: 4000, maxContentLength: 1500000, responseType: 'text', validateStatus: () => true,
+      headers: { 'User-Agent': UA, Referer: pageUrl },
+    });
+    const h = String(r.data);
+    console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : HTTP ${r.status}, ${h.length} octets, serveur ${r.headers.server || '?'}`);
+    console.log(`  ↳ EXTRAIT TÉLÉCHARGEMENT : ${h.replace(/\s+/g, ' ').slice(0, 1800)}`);
+  } catch (e) {
+    console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.code || e.message}`);
+  }
 }
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
@@ -121,7 +142,7 @@ async function resolveEmbed(url, referer) {
       if (viaMd5.length) return viaMd5;
     }
     if (!found.length) {
-      const viaXfs = await tryXfs(url, html);
+      const viaXfs = await tryXfs(url, html, referer);
       if (viaXfs.length) return viaXfs;
     }
     if (!found.length) {
