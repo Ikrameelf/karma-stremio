@@ -70,7 +70,7 @@ async function meta(id) {
   const poster = abs($('meta[property="og:image"]').attr('content'));
   const rating = ($('span.imdb').first().text().match(/[\d.]+/) || [])[0];
   const genres = [...new Set($('span a[href*="genre/"]').map((_, e) => $(e).text().trim()).get())];
-  const cast = $('span.shorting a').map((_, e) => $(e).text().trim()).get();
+  const cast = $('span.shorting a').map((_, e) =>$(e).text().trim()).get();
 
   const videos = $('div#episodes a.episod').toArray().reverse().map((el, i) => {
     const a = $(el);
@@ -108,14 +108,29 @@ function collectStatic(html) {
   const dl = abs($('.dl-contenti a').first().attr('href'));
   if (dl) found.add(dl);
   $('iframe').each((_, el) => {
-    const s = abs($(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src'));
+    const s = abs($(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src'));
     if (s && /^https?:/.test(s)) found.add(s);
   });
   (html.match(HLS_RE) || []).forEach((u) => found.add(u));
+  (html.match(MP4_RE) || []).forEach((u) => found.add(u));
   return [...found].filter((u) => !AD.test(u));
 }
 
-// Équivalent du WebViewResolver de CloudStream : ouvre la page, clique les onglets, capte les liens.
+// Tente de récupérer un lien direct .m3u8 / .mp4 depuis une page/iframe si resolveEmbed échoue
+async function fetchDirectMediaFromUrl(url, referer) {
+  try {
+    const html = await getHtml(url, { Referer: referer || BASE + '/' });
+    const hls = html.match(HLS_RE);
+    if (hls && hls.length) return hls[0];
+    const mp4 = html.match(MP4_RE);
+    if (mp4 && mp4.length) return mp4[0];
+  } catch (e) {
+    // Ignorer si la requête échoue
+  }
+  return null;
+}
+
+// Équivalent du WebViewResolver de CloudStream
 async function collectWithBrowser(url) {
   let chromium;
   try { ({ chromium } = require('playwright')); } catch { return []; }
@@ -133,11 +148,7 @@ async function collectWithBrowser(url) {
     const dl = await page.$eval('.dl-contenti a', (a) => a.href).catch(() => null);
     if (dl) found.add(dl);
 
-    const tabs = await page.$$('.optitabs a[href^="#tab"]');
-    for (const tab of tabs) {
-      await tab.click().catch(() => {});
-      await page.waitForTimeout(1200);
-      for (const f of await page.$$('#player iframe, .play iframe')) {
+    const tabs = await page.$$('.optitabs a[href^="#tab"]');     for (const tab of tabs) {       await tab.click().catch(() => {});       await page.waitForTimeout(1200);       for (const f of await page.$$('#player iframe, .play iframe')) {
         const s = await f.getAttribute('src');
         if (s && /^https?:/.test(s)) found.add(s);
       }
@@ -163,19 +174,33 @@ async function stream(id) {
 
   const streams = [];
   const seen = new Set();
+
   for (const url of candidates) {
     if (seen.has(url)) continue;
     seen.add(url);
-    if (/\.m3u8|\/sora\//i.test(url)) {
-      streams.push(directStream(url, 'Direct (HLS)'));
+
+    // 1. Détection directe de flux HLS ou MP4
+    if (/\.m3u8|\.mp4|\/sora\//i.test(url)) {
+      streams.push(directStream(url, 'YoTurkish Direct'));
       continue;
     }
+
+    // 2. Détection via les extracteurs d'embeds
     const links = await resolveEmbed(url, epUrl);
-    if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
-    else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
+    if (links.length) {
+      links.forEach((l) => streams.push(directStream(l.url, `YoTurkish (${l.kind || 'Direct'})`, l.headers)));
+      continue;
+    }
+
+    // 3. Secours : tentative d'extraction directe de la page/iframe sans passer par externalUrl
+    const fallbackUrl = await fetchDirectMediaFromUrl(url, epUrl);
+    if (fallbackUrl) {
+      streams.push(directStream(fallbackUrl, 'YoTurkish Direct (Fallback)'));
+    }
   }
-  const playableLinks = streams.filter((x) => x.url);
-  return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : streams;
+
+  // Filtrer pour ne conserver STRICTEMENT QUE les flux lisibles directement dans Stremio
+  return streams.filter((s) => Boolean(s.url));
 }
 
 module.exports = {
