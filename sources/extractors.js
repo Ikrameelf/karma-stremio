@@ -43,19 +43,25 @@ function candidates(text, pageUrl) {
   return [...out];
 }
 
-// Doodstream : la page publie un chemin /pass_md5/... qui donne la base du lien vidéo.
+// Méthode "pass_md5" (Doodstream et clones) : la page publie un chemin /pass_md5/... qui donne la base du lien vidéo.
 const DOOD = /(^|\.)(dood|d0o0d|d000d|ds2play|doodstream|dooood|dsvplay)[\w-]*\./i;
+async function passMd5(html, pageUrl) {
+  const u = new URL(pageUrl);
+  const md5 = String(html).match(/\/pass_md5\/[^'"\s]+/);
+  if (!md5) return [];
+  const token = md5[0].split('/').pop();
+  const { data: base } = await axios.get(u.origin + md5[0], {
+    timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: pageUrl },
+  });
+  if (!/^https?:/.test(String(base))) return [];
+  const rand = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('');
+  return [{ url: `${String(base).trim()}${rand}?token=${token}&expiry=${Date.now()}`, kind: 'MP4', headers: { Referer: u.origin + '/', 'User-Agent': UA } }];
+}
 async function resolveDood(url) {
   const u = new URL(url);
   const embed = `${u.origin}/e/${u.pathname.split('/').filter(Boolean).pop()}`;
   const { data: html } = await axios.get(embed, { timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
-  const md5 = String(html).match(/\/pass_md5\/[^'"]+/);
-  if (!md5) return [];
-  const token = md5[0].split('/').pop();
-  const { data: base } = await axios.get(u.origin + md5[0], { timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: embed } });
-  if (!/^https?:/.test(String(base))) return [];
-  const rand = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('');
-  return [{ url: `${String(base).trim()}${rand}?token=${token}&expiry=${Date.now()}`, kind: 'MP4', headers: { Referer: u.origin + '/', 'User-Agent': UA } }];
+  return passMd5(html, embed);
 }
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
@@ -72,7 +78,15 @@ async function resolveEmbed(url, referer) {
     });
     const html = typeof data === 'string' ? data : JSON.stringify(data);
     const found = candidates(html + '\n' + unpackAll(html), url);
-    if (!found.length) console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
+    if (!found.length && /\/pass_md5\//.test(html)) {
+      const viaMd5 = await passMd5(html, url);
+      if (viaMd5.length) return viaMd5;
+    }
+    if (!found.length) {
+      console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
+      console.log(`  ↳ URL : ${url}`);
+      console.log(`  ↳ EXTRAIT : ${html.replace(/\s+/g, ' ').slice(0, 2500)}`);
+    }
     return found
       .slice(0, 3)
       .map((u) => ({
