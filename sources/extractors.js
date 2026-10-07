@@ -1,5 +1,6 @@
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
+// Si rien n'est trouvé : ouvre l'embed dans un vrai navigateur (Playwright) et capte les requêtes réseau.
 const axios = require('axios');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -58,34 +59,89 @@ async function resolveDood(url) {
   return [{ url: `${String(base).trim()}${rand}?token=${token}&expiry=${Date.now()}`, kind: 'MP4', headers: { Referer: u.origin + '/', 'User-Agent': UA } }];
 }
 
+// Secours : ouvre l'embed dans Chromium, tente de lancer la lecture et capte les requêtes .m3u8/.mp4.
+// Utile quand le lien vidéo est construit par JavaScript et n'apparaît pas dans le HTML.
+async function sniffWithBrowser(url, referer) {
+  let chromium;
+  try { ({ chromium } = require('playwright')); } catch {
+    console.error('[extractors] playwright non installé : npm i playwright && npx playwright install chromium');
+    return [];
+  }
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const ctx = await browser.newContext({ userAgent: UA });
+    ctx.on('page', (p) => p.close().catch(() => {})); // ferme les pop-ups publicitaires
+    const page = await ctx.newPage();
+    const found = new Set();
+    page.on('request', (r) => {
+      const u = r.url();
+      if (VIDEO.test(u) && !NOISE.test(u)) found.add(u.split('#')[0]);
+    });
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000, referer: referer || undefined }).catch(() => {});
+
+    for (let i = 0; i < 16 && !found.size; i++) {
+      if (i % 4 === 1) {
+        // tente de déclencher la lecture (lecteur principal + iframes)
+        for (const f of page.frames()) {
+          await f.click('video, .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid, button', { timeout: 500 }).catch(() => {});
+        }
+        await page.mouse.click(400, 300).catch(() => {});
+      }
+      await page.waitForTimeout(500);
+    }
+    return [...found];
+  } finally {
+    await browser.close();
+  }
+}
+
+const toLinks = (list, origin) =>
+  list.slice(0, 3).map((u) => ({
+    url: u,
+    kind: /\.m3u8/i.test(u) ? 'HLS' : 'MP4',
+    headers: { Referer: origin + '/', 'User-Agent': UA },
+  }));
+
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
-async function resolveEmbed(url, referer) {
+// opts.sniff = false désactive le secours navigateur (pour ne pas le lancer pour rien).
+async function resolveEmbed(url, referer, opts = {}) {
   let origin;
   try { origin = new URL(url).origin; } catch { return []; }
+  const allowSniff = opts.sniff !== false && !process.env.NO_BROWSER_SNIFF;
+  let found = [];
+
   try {
-    if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
+    if (DOOD.test(new URL(url).hostname)) {
+      const d = await resolveDood(url);
+      if (d.length) return d;
+    }
     const { data } = await axios.get(url, {
-      timeout: 4000,
+      timeout: 10000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
     const html = typeof data === 'string' ? data : JSON.stringify(data);
-    const found = candidates(html + '\n' + unpackAll(html), url);
+    found = candidates(html + '\n' + unpackAll(html), url);
     if (!found.length) console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
-    return found
-      .slice(0, 3)
-      .map((u) => ({
-        url: u,
-        kind: /\.m3u8/i.test(u) ? 'HLS' : 'MP4',
-        headers: { Referer: origin + '/', 'User-Agent': UA },
-      }));
   } catch (err) {
     const why = err.response
       ? `HTTP ${err.response.status} (serveur : ${err.response.headers['server'] || '?'})`
       : err.code || err.message;
     console.log(`  ↳ ${origin} : ÉCHEC ${why}`);
-    return [];
   }
+
+  if (!found.length && allowSniff) {
+    console.log(`  ↳ ${origin} : tentative via navigateur...`);
+    try {
+      found = await sniffWithBrowser(url, referer);
+      console.log(`  ↳ ${origin} : navigateur → ${found.length} lien(s) vidéo`);
+    } catch (e) {
+      console.log(`  ↳ ${origin} : navigateur ÉCHEC ${e.message}`);
+    }
+  }
+
+  return toLinks(found, origin);
 }
 
 module.exports = { resolveEmbed, unpackAll };
