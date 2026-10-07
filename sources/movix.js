@@ -1,189 +1,166 @@
-// Port Stremio du provider CloudStream "YoTurkish" (Cs-Karma).
+// Port Stremio du provider CloudStream "Movix" (Cs-Karma) : addon de STREAMS uniquement.
+// Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
 const axios = require('axios');
-const cheerio = require('cheerio');
 const { resolveEmbed } = require('./extractors');
 
-const BASE = 'https://yoturkish.to';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
-const http = axios.create({ timeout: 20000, headers: { 'User-Agent': UA, Referer: BASE + '/' } });
+const TMDB_KEY = process.env.TMDB_API_KEY || '';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
 
-const GENRES = {
-  Adventure: '/genre/adventure/', Action: '/genre/action/', Romance: '/genre/romance/',
-  Drama: '/genre/drama/', Comedy: '/genre/comedy/', Crime: '/genre/crime/',
-  Family: '/genre/family/', History: '/genre/history/', Mystery: '/genre/mystery/',
-  Thriller: '/genre/thriller/', War: '/genre/war/', Horror: '/genre/horror/',
-};
+const cleanDomain = (u) => String(u || '').trim()
+  .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
 
-const AD = /sharethis|pubadx|yandex|a-ads|googletagmanager|doubleclick/i;
-const EMBED_HOSTS = /(engifuosi|rufiiguta|tukipasti|kitraskimisi|sssrr)\.\w+/i;
-const HLS_RE = /https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*/gi;
-const MP4_RE = /https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*/gi;
-
-const enc = (s) => Buffer.from(s).toString('base64url');
-const dec = (s) => Buffer.from(s, 'base64url').toString();
-const abs = (u) => { try { return u ? new URL(u, BASE).href : undefined; } catch { return undefined; } };
-const pathOf = (href) => { const u = new URL(href, BASE); return u.pathname + u.search; };
-const getHtml = async (url, headers = {}) => (await http.get(url, { headers, responseType: 'text' })).data;
-
-let pageSize = 20; // ajusté automatiquement après le premier chargement
-
-// ---------- Catalogue ----------
-function parseCards($) {
-  const cards = new Map();
-  $('div.item').each((_, el) => {
-    const a = $(el).find('a').first();
-    const title = a.attr('title');
-    const href = a.attr('href');
-    if (!title || !href) return;
-    const img = $(el).find('img').first();
-    const poster = abs(img.attr('src') || img.attr('data-src'));
-    const rating = ($(el).find('span.imdb').first().text().match(/[\d.]+/) || [])[0];
-    const id = 'yot:' + enc(pathOf(href));
-    if (!cards.has(id)) cards.set(id, { id, type: 'series', name: title.trim(), poster, imdbRating: rating });
-  });
-  return [...cards.values()];
-}
-
-async function catalog({ genre, search, skip = 0 }) {
-  const base = genre && GENRES[genre] ? GENRES[genre] : '/series/';
-  const page = Math.floor(Number(skip) / pageSize) + 1;
-  let url;
-  if (search) {
-    const q = encodeURIComponent(search);
-    url = page === 1 ? `${BASE}/?s=${q}` : `${BASE}/page/${page}/?s=${q}`;
-  } else {
-    url = page === 1 ? BASE + base : `${BASE}${base}page/${page}/`;
-  }
-  const metas = parseCards(cheerio.load(await getHtml(url)));
-  if (page === 1 && metas.length) pageSize = metas.length;
-  return metas;
-}
-
-// ---------- Fiche série ----------
-async function meta(id) {
-  const path = dec(id.slice(4));
-  const $ = cheerio.load(await getHtml(BASE + path));
-
-  const name = $('h1').first().text().trim();
-  if (!name) return null;
-  const poster = abs($('meta[property="og:image"]').attr('content'));
-  const rating = ($('span.imdb').first().text().match(/[\d.]+/) || [])[0];
-  const genres = [...new Set($('span a[href*="genre/"]').map((_, e) => $(e).text().trim()).get())];
-  const cast = $('span.shorting a').map((_, e) => $(e).text().trim()).get();
-
-  const videos = $('div#episodes a.episod').toArray().reverse().map((el, i) => {
-    const a = $(el);
-    const n = parseInt((a.text().match(/Episode\s*(\d+)/i) || [])[1], 10) || i + 1;
-    return {
-      id: 'yot:ep:' + enc(pathOf(a.attr('href'))),
-      title: `Episode ${n}`,
-      season: 1,
-      episode: n,
-      released: new Date(Date.UTC(2000, 0, 1 + i)).toISOString(),
-    };
-  });
-
-  return {
-    id, type: 'series', name, poster, background: poster,
-    description: $('div.desc.shorting p').first().text().trim() || undefined,
-    releaseInfo: $('span a[href*="year/"]').first().text().trim() || undefined,
-    imdbRating: rating, genres, cast, videos,
-  };
-}
-
-// ---------- Streams ----------
-function directStream(url, label, headers) {
-  return {
-    name: 'YoTurkish',
-    title: label,
-    url,
-    behaviorHints: {
-      notWebReady: true,
-      proxyHeaders: { request: headers || { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA } },
-    },
-  };
-}
-
-function collectStatic(html) {
-  const $ = cheerio.load(html);
-  const found = new Set();
-  const dl = abs($('.dl-contenti a').first().attr('href'));
-  if (dl) found.add(dl);
-  $('iframe').each((_, el) => {
-    const s = abs($(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src'));
-    if (s && /^https?:/.test(s)) found.add(s);
-  });
-  (html.match(HLS_RE) || []).forEach((u) => found.add(u));
-  return [...found].filter((u) => !AD.test(u));
-}
-
-// Équivalent du WebViewResolver de CloudStream : ouvre la page, clique les onglets, capte les liens.
-async function collectWithBrowser(url) {
-  let chromium;
-  try { ({ chromium } = require('playwright')); } catch { return []; }
-  const browser = await chromium.launch({ headless: true });
+// Comme MovixHelper.updatemainurl() du Kotlin : le domaine actif est publié dans address.json.
+let cachedDomain = { value: null, at: 0 };
+async function getDomain() {
+  if (cachedDomain.value && Date.now() - cachedDomain.at < 6 * 3600 * 1000) return cachedDomain.value;
   try {
-    const page = await browser.newPage({ userAgent: UA });
-    const found = new Set();
-    const interesting = (u) =>
-      (/\.m3u8|\/sora\//i.test(u) || EMBED_HOSTS.test(u)) && !/\.(js|css|png|jpe?g|woff2?|svg|json)(\?|$)/i.test(u);
-    page.on('request', (r) => { if (interesting(r.url())) found.add(r.url().split('#')[0]); });
+    const { data } = await axios.get('https://movix.online/address.json', { timeout: 8000, headers: { 'User-Agent': UA } });
+    const url = data && data.active && data.active[0] && data.active[0].url;
+    if (url) {
+      cachedDomain = { value: cleanDomain(url), at: Date.now() };
+      console.log('Movix domaine actif :', cachedDomain.value);
+      return cachedDomain.value;
+    }
+  } catch (e) {
+    console.log('Movix : address.json inaccessible (' + (e.code || e.message) + ')');
+  }
+  return cachedDomain.value || cleanDomain(process.env.MOVIX_DOMAIN); // repli manuel
+}
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForSelector('.optitabs a[href^="#tab"]', { timeout: 5000 }).catch(() => {});
+const tmdbCache = new Map();
 
-    const dl = await page.$eval('.dl-contenti a', (a) => a.href).catch(() => null);
-    if (dl) found.add(dl);
+async function toTmdbId(imdb, type) {
+  const key = `${imdb}:${type}`;
+  if (tmdbCache.has(key)) return tmdbCache.get(key);
+  const { data } = await axios.get(`https://api.themoviedb.org/3/find/${imdb}`, {
+    params: { api_key: TMDB_KEY, external_source: 'imdb_id' }, timeout: 15000,
+  });
+  const list = type === 'movie' ? data.movie_results : data.tv_results;
+  const tmdb = list && list[0] ? list[0].id : null;
+  tmdbCache.set(key, tmdb);
+  return tmdb;
+}
 
-    const tabs = await page.$$('.optitabs a[href^="#tab"]');
-    for (const tab of tabs) {
-      await tab.click().catch(() => {});
-      await page.waitForTimeout(1200);
-      for (const f of await page.$$('#player iframe, .play iframe')) {
-        const s = await f.getAttribute('src');
-        if (s && /^https?:/.test(s)) found.add(s);
+function endpoints(API, type, id, imdb, s, e) {
+  const q = `?season=${s}&episode=${e}`;
+  if (type === 'movie') {
+    return [
+      ['Movix', `${API}/links/movie/${id}`],
+      ['Movix TMDB', `${API}/tmdb/movie/${id}`],
+      ['IMDB', `${API}/imdb/movie/${imdb}`],
+      ['FStream', `${API}/fstream/movie/${id}`],
+      ['Wiflix', `${API}/wiflix/movie/${id}`],
+      ['J1F', `${API}/j1f/movie/${id}`],
+      ['Cpasmal', `${API}/cpasmal/movie/${id}`],
+      ['Purstream', `${API}/purstream/movie/${id}/stream`],
+      ['SwiftFlow', `${API}/swiftflow/movie/${id}`],
+      ['KissKh', `${API}/kisskh/movie/${id}`],
+      ['Frembed', `https://frembed.surf/api/public/v1/movies/${id}`],
+    ];
+  }
+  return [
+    ['Movix', `${API}/links/tv/${id}${q}`],
+    ['Movix TMDB', `${API}/tmdb/tv/${id}${q}`],
+    ['IMDB', `${API}/imdb/tv/${imdb}`],
+    ['FStream', `${API}/fstream/tv/${id}/season/${s}?episode=${e}`],
+    ['Wiflix', `${API}/wiflix/tv/${id}/${s}?episode=${e}`],
+    ['Cpasmal', `${API}/cpasmal/tv/${id}/${s}/${e}`],
+    ['Purstream', `${API}/purstream/tv/${id}/stream?season=${s}&episode=${e}`],
+    ['SwiftFlow', `${API}/swiftflow/tv/${id}/season/${s}?episode=${e}`],
+    ['J1F', `${API}/j1f/tv/${id}/season/${s}?episode=${e}`],
+    ['KissKh', `${API}/kisskh/tv/${id}${q}`],
+    ['Frembed', `https://frembed.surf/api/public/v1/tv/${id}?sa=${s}&epi=${e}`],
+    ['Drama', `${API}/drama/tv/${id}${q}`],
+  ];
+}
+
+const NOISE = /\.(jpe?g|png|webp|gif|svg|ico|js|css|vtt|srt|ass|woff2?)(\?|$)|image\.tmdb\.org|youtube\.com|youtu\.be/i;
+const DIRECT = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
+
+// Parseur générique : on extrait toutes les URLs de la réponse, sans connaître le format exact de chaque API.
+function extractUrls(data) {
+  const text = (typeof data === 'string' ? data : JSON.stringify(data)).replace(/\\\//g, '/');
+  return [...new Set(text.match(/https?:\/\/[^"'\s\\<>]+/g) || [])].filter((u) => !NOISE.test(u));
+}
+
+async function stream(id, type) {
+  if (!TMDB_KEY) {
+    console.error('Movix: définissez TMDB_API_KEY');
+    return [];
+  }
+  const DOMAIN = await getDomain();
+  if (!DOMAIN) {
+    console.error('Movix: domaine introuvable (address.json KO et MOVIX_DOMAIN vide)');
+    return [];
+  }
+  const API = `https://api.${DOMAIN}/api`;
+  const HEADERS = { 'User-Agent': UA, Origin: `https://${DOMAIN}`, Referer: `https://${DOMAIN}/` };
+  const [imdb, s = '1', e = '1'] = id.split(':');
+  const kind = type === 'movie' ? 'movie' : 'tv';
+  const tmdb = await toTmdbId(imdb, kind);
+  if (!tmdb) return [];
+
+  const results = await Promise.allSettled(
+    endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
+      try {
+        const res = await axios.get(url, { headers: HEADERS, timeout: 15000, validateStatus: (c) => c < 400 });
+        const urls = extractUrls(res.data);
+        console.log(`Movix ${brand}: HTTP ${res.status}, ${urls.length} lien(s)`);
+        return { brand, urls };
+      } catch (err) {
+        const code = err.response ? `HTTP ${err.response.status}` : err.code || err.message;
+        console.log(`Movix ${brand}: ÉCHEC (${code}) ${url}`);
+        throw err;
+      }
+    })
+  );
+
+  const seen = new Set();
+  const direct = [];
+  const embeds = [];
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    for (const url of r.value.urls) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      if (DIRECT.test(url)) {
+        direct.push({
+          name: `Movix ${r.value.brand}`,
+          title: DIRECT.exec(url)[1].toUpperCase(),
+          url,
+          behaviorHints: {
+            notWebReady: true,
+            proxyHeaders: { request: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA } },
+          },
+        });
+      } else if (!url.includes(`api.${DOMAIN}`)) {
+        embeds.push({ brand: r.value.brand, url });
       }
     }
-    return [...found].filter((u) => !AD.test(u));
-  } finally {
-    await browser.close();
-  }
-}
-
-async function stream(id) {
-  const epUrl = BASE + dec(id.slice('yot:ep:'.length));
-  const html = await getHtml(epUrl);
-
-  let candidates = collectStatic(html);
-  if (!candidates.length || process.env.FORCE_BROWSER) {
-    try {
-      candidates = [...new Set([...candidates, ...(await collectWithBrowser(epUrl))])];
-    } catch (e) {
-      console.error('navigateur indisponible :', e.message);
-    }
   }
 
-  const streams = [];
-  const seen = new Set();
-  for (const url of candidates) {
-    if (seen.has(url)) continue;
-    seen.add(url);
-    if (/\.m3u8|\/sora\//i.test(url)) {
-      streams.push(directStream(url, 'Direct (HLS)'));
-      continue;
-    }
-    const links = await resolveEmbed(url, epUrl);
-    if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
-    else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
-  }
-  return streams;
+  // Tente d'extraire un lien vidéo de chaque page d'embed (en parallèle, limité pour rester rapide).
+  const resolved = await Promise.all(
+    embeds.slice(0, 15).map(async ({ brand, url }) => {
+      const host = new URL(url).hostname.replace(/^www\./, '');
+      const links = await resolveEmbed(url, HEADERS.Referer);
+      return links.length
+        ? links.map((l) => ({
+            name: `Movix ${brand}`,
+            title: `${host} · ${l.kind}`,
+            url: l.url,
+            behaviorHints: { notWebReady: true, proxyHeaders: { request: l.headers } },
+          }))
+        : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
+    })
+  );
+  const extra = embeds.slice(15).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
+  const all = [...direct, ...resolved.flat(), ...extra];
+  return [...all.filter((x) => x.url), ...all.filter((x) => !x.url)];
 }
 
 module.exports = {
-  prefix: 'yot:',
-  catalogId: 'yoturkish',
-  catalogName: 'YoTurkish',
-  types: ['series'],
-  genres: Object.keys(GENRES),
-  catalog, meta, stream,
+  prefix: 'tt', // IDs IMDb
+  types: ['movie', 'series'],
+  stream,
 };
