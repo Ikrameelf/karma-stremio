@@ -64,6 +64,44 @@ async function resolveDood(url) {
   return passMd5(html, embed);
 }
 
+// Pages de téléchargement type XFileSharing (ex. engifuosi.com/d/<code>.html) : on devine l'adresse du lecteur
+// à partir du code du fichier, sur le même site et sur les hôtes cités dans la page (ex. tokvoy.com).
+async function tryXfs(url, html) {
+  const u = new URL(url);
+  const m = u.pathname.match(/\/(?:d|f|e|v)\/([a-z0-9]{8,})/i);
+  if (!m) return [];
+  const code = m[1];
+  const hosts = new Set([u.origin]);
+  for (const h of String(html).matchAll(/https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\/d\/[a-z0-9]+/gi)) {
+    if (!/^(cdnjs|www\.w3)/i.test(h[1])) hosts.add('https://' + h[1]);
+  }
+  const paths = [`/f/${code}`, `/e/${code}`, `/embed-${code}.html`, `/v/${code}`, `/${code}`];
+  const tries = [...hosts].flatMap((h) => paths.map((p) => h + p));
+  const results = await Promise.all(tries.map(async (t) => {
+    try {
+      const { data } = await axios.get(t, {
+        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        headers: { 'User-Agent': UA, Referer: u.origin + '/' },
+      });
+      const h = String(data);
+      const f = candidates(h + '\n' + unpackAll(h), t);
+      console.log(`  ↳ essai ${t} : ${f.length} lien(s)`);
+      return f.length ? { t, f } : null;
+    } catch (e) {
+      console.log(`  ↳ essai ${t} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+      return null;
+    }
+  }));
+  const ok = results.find(Boolean);
+  if (!ok) return [];
+  const origin = new URL(ok.t).origin;
+  return ok.f.slice(0, 3).map((link) => ({
+    url: link,
+    kind: /\.m3u8/i.test(link) ? 'HLS' : 'MP4',
+    headers: { Referer: origin + '/', 'User-Agent': UA },
+  }));
+}
+
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
 async function resolveEmbed(url, referer) {
   let origin;
@@ -81,6 +119,10 @@ async function resolveEmbed(url, referer) {
     if (!found.length && /\/pass_md5\//.test(html)) {
       const viaMd5 = await passMd5(html, url);
       if (viaMd5.length) return viaMd5;
+    }
+    if (!found.length) {
+      const viaXfs = await tryXfs(url, html);
+      if (viaXfs.length) return viaXfs;
     }
     if (!found.length) {
       console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
