@@ -7,6 +7,9 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const SECRET = process.env.PROXY_SECRET || crypto.randomBytes(16).toString('hex');
 const PUBLIC = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 
+let active = 0;
+const MAX_ACTIVE = 6; // connexions vidéo simultanées max
+
 const b64 = (s) => Buffer.from(s).toString('base64url');
 const unb64 = (s) => Buffer.from(s, 'base64url').toString();
 const sign = (u, h) => crypto.createHmac('sha256', SECRET).update(u + '\n' + h).digest('base64url');
@@ -54,6 +57,12 @@ async function handler(req, res) {
 
   let target, headers;
   try { target = unb64(u); headers = JSON.parse(unb64(h)); } catch { return res.status(400).end(); }
+
+  if (active >= MAX_ACTIVE) return res.set('Retry-After', '2').status(503).end();
+  active++;
+  let released = false;
+  const release = () => { if (!released) { released = true; active--; } };
+  res.on('close', release);
 
   const out = { 'User-Agent': UA, ...headers };
   if (req.headers.range) out.Range = req.headers.range;
