@@ -70,25 +70,38 @@ async function sniffWithBrowser(url, referer) {
   const browser = await chromium.launch({ headless: true });
   try {
     const ctx = await browser.newContext({ userAgent: UA });
-    ctx.on('page', (p) => p.close().catch(() => {})); // ferme les pop-ups publicitaires
-    const page = await ctx.newPage();
     const found = new Set();
-    page.on('request', (r) => {
-      const u = r.url();
-      if (VIDEO.test(u) && !NOISE.test(u)) found.add(u.split('#')[0]);
-    });
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000, referer: referer || undefined }).catch(() => {});
+    // Variantes à essayer : l'URL telle quelle, puis /e/ si c'est une page /d/ (téléchargement)
+    const variants = [url];
+    if (/\/d\//.test(url)) variants.push(url.replace('/d/', '/e/').replace(/\.html$/, ''));
 
-    for (let i = 0; i < 16 && !found.size; i++) {
-      if (i % 4 === 1) {
-        // tente de déclencher la lecture (lecteur principal + iframes)
-        for (const f of page.frames()) {
-          await f.click('video, .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid, button', { timeout: 500 }).catch(() => {});
+    for (const target of variants) {
+      const page = await ctx.newPage();
+      // ferme les pop-ups publicitaires (mais jamais la page principale)
+      const onPopup = (p) => { if (p !== page) p.close().catch(() => {}); };
+      ctx.on('page', onPopup);
+      page.on('request', (r) => {
+        const u = r.url();
+        if (VIDEO.test(u) && !NOISE.test(u)) found.add(u.split('#')[0]);
+      });
+
+      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 15000, referer: referer || undefined }).catch(() => {});
+
+      for (let i = 0; i < 16 && !found.size; i++) {
+        if (page.isClosed()) break;
+        if (i % 4 === 1) {
+          // tente de déclencher la lecture (lecteur principal + iframes)
+          for (const f of page.frames()) {
+            await f.click('video, .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid, button', { timeout: 500 }).catch(() => {});
+          }
+          await page.mouse.click(400, 300).catch(() => {});
         }
-        await page.mouse.click(400, 300).catch(() => {});
+        await page.waitForTimeout(500).catch(() => {});
       }
-      await page.waitForTimeout(500);
+      ctx.off('page', onPopup);
+      if (found.size) break;
+      await page.close().catch(() => {});
     }
     return [...found];
   } finally {
