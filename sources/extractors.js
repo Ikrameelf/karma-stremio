@@ -48,11 +48,11 @@ const DOOD = /(^|\.)(dood|d0o0d|d000d|ds2play|doodstream|dooood|dsvplay)[\w-]*\.
 async function resolveDood(url) {
   const u = new URL(url);
   const embed = `${u.origin}/e/${u.pathname.split('/').filter(Boolean).pop()}`;
-  const { data: html } = await axios.get(embed, { timeout: 7000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
+  const { data: html } = await axios.get(embed, { timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
   const md5 = String(html).match(/\/pass_md5\/[^'"]+/);
   if (!md5) return [];
   const token = md5[0].split('/').pop();
-  const { data: base } = await axios.get(u.origin + md5[0], { timeout: 7000, responseType: 'text', headers: { 'User-Agent': UA, Referer: embed } });
+  const { data: base } = await axios.get(u.origin + md5[0], { timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: embed } });
   if (!/^https?:/.test(String(base))) return [];
   const rand = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('');
   return [{ url: `${String(base).trim()}${rand}?token=${token}&expiry=${Date.now()}`, kind: 'MP4', headers: { Referer: u.origin + '/', 'User-Agent': UA } }];
@@ -65,7 +65,7 @@ async function resolveEmbed(url, referer) {
   try {
     if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
     const { data } = await axios.get(url, {
-      timeout: 7000,
+      timeout: 4000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
