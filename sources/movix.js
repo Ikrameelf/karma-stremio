@@ -186,13 +186,26 @@ async function streamFull(id, type) {
   return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : [...playableLinks, ...browserLinks];
 }
 
+// Au plus 2 recherches de liens en même temps, pour ne pas saturer la mémoire du serveur gratuit.
+let running = 0;
+const waiting = [];
+function limited(fn) {
+  return new Promise((resolve, reject) => {
+    const go = () => {
+      running++;
+      fn().then(resolve, reject).finally(() => { running--; const next = waiting.shift(); if (next) next(); });
+    };
+    running < 2 ? go() : waiting.push(go);
+  });
+}
+
 // Cache de 10 min : une 2e ouverture du même titre est instantanée, même si la 1re a expiré côté Stremio.
 const cache = new Map();
 function stream(id, type) {
   let e = cache.get(id);
   if (!e || Date.now() - e.at > 10 * 60 * 1000) {
     e = { at: Date.now(), value: null };
-    e.promise = streamFull(id, type)
+    e.promise = limited(() => streamFull(id, type))
       .then((v) => { if (v.length) e.value = v; else cache.delete(id); return v; }) // un résultat vide n'est jamais mis en cache
       .catch((err) => { cache.delete(id); throw err; });
     cache.set(id, e);
