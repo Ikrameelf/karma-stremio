@@ -1,129 +1,200 @@
-// sources/nowtv.js
+const axios = require('axios');
+const { playable } = require('./proxy');
 
-const axios = require("axios");
+const BASE = 'https://www.nowtv.com.tr';
 
-const BASE_URL = "https://www.nowtv.com.tr";
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36';
 
-const headers = {
-    "User-Agent":
-        "Mozilla/5.0 (Linux; Android 10; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-    "Accept-Language": "tr-TR,tr;q=0.9",
-    "Referer": `${BASE_URL}/`
-};
+const http = axios.create({
+  timeout: 15000,
+  headers: {
+    'User-Agent': UA,
+    'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+  },
+});
 
-async function getPage(url) {
-    try {
-        const response = await axios.get(url, {
-            headers,
-            timeout: 15000
-        });
+const enc = (s) => Buffer.from(s).toString('base64url');
+const dec = (s) => Buffer.from(s, 'base64url').toString();
 
-        return response.data;
-    } catch (error) {
-        console.error("[NOW TV] Page error:", error.message);
-        return null;
-    }
+function slugify(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/ç/g, 'c')
+    .replace(/ğ/g, 'g')
+    .replace(/ı/g, 'i')
+    .replace(/ö/g, 'o')
+    .replace(/ş/g, 's')
+    .replace(/ü/g, 'u')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
-function absoluteUrl(url) {
-    if (!url) return null;
-
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-        return url;
-    }
-
-    return new URL(url, BASE_URL).href;
+function cleanTitle(s) {
+  return slugify(s).replace(/-/g, '');
 }
 
-/*
- * Cherche les URLs NOW correspondant aux pages d'épisodes.
- *
- * Exemple :
- * https://www.nowtv.com.tr/Nom-Dizi/bolum/123
- */
-function extractEpisodeUrls(html) {
-    if (!html) return [];
-
-    const results = new Set();
-
-    const regex =
-        /(?:href|content)=["']([^"']*\/bolum\/[^"']+)["']/gi;
-
-    let match;
-
-    while ((match = regex.exec(html)) !== null) {
-        const url = absoluteUrl(match[1]);
-
-        if (url && url.includes("/bolum/")) {
-            results.add(url);
-        }
-    }
-
-    return [...results];
-}
-
-/*
- * Pour l'instant on recherche les différentes formes
- * que NOW peut utiliser pour transmettre la vidéo
- * au lecteur.
- */
-function extractVideoData(html) {
-    if (!html) return [];
-
-    const results = new Set();
-
-    const patterns = [
-        /https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/gi,
-        /https?:\/\/[^"'\\\s]+\.mp4[^"'\\\s]*/gi,
-        /https?:\/\/[^"'\\\s]+\/video\/[^"'\\\s]*/gi
-    ];
-
-    for (const regex of patterns) {
-        let match;
-
-        while ((match = regex.exec(html)) !== null) {
-            results.add(match[0]);
-        }
-    }
-
-    return [...results];
-}
-
-async function getEpisodes(seriesUrl) {
-    const html = await getPage(seriesUrl);
-
-    if (!html) {
-        return [];
-    }
-
-    return extractEpisodeUrls(html);
-}
-
-async function getStream(episodeUrl) {
-    console.log("[NOW TV] Episode:", episodeUrl);
-
-    const html = await getPage(episodeUrl);
-
-    if (!html) {
-        return [];
-    }
-
-    const videos = extractVideoData(html);
-
-    console.log(
-        `[NOW TV] ${videos.length} flux potentiel(s) trouvé(s)`
+async function getCinemetaTitle(imdbId) {
+  try {
+    const { data } = await http.get(
+      `https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`
     );
 
-    return videos.map((url, index) => ({
-        name: "NOW TV Türkiye",
-        title: `NOW TV Türkiye • VO ${index + 1}`,
-        url,
-        type: url.includes(".m3u8") ? "hls" : "http"
-    }));
+    return (
+      data &&
+      data.meta &&
+      (data.meta.name || data.meta.originalName)
+    ) || '';
+  } catch (e) {
+    console.log('NOW TV Cinemeta:', e.message);
+    return '';
+  }
+}
+
+async function getNowSlugs(title) {
+  const candidates = [];
+
+  const add = (value) => {
+    const slug = slugify(value);
+    if (slug && !candidates.includes(slug)) {
+      candidates.push(slug);
+    }
+  };
+
+  add(title);
+
+  // Quelques variantes fréquentes
+  add(String(title).replace(/^The-/i, ''));
+  add(String(title).replace(/^Bir-/i, ''));
+  add(String(title).replace(/^the\s+/i, ''));
+  add(String(title).replace(/^bir\s+/i, ''));
+
+  return candidates;
+}
+
+async function getVideoUrl(showSlug, episode) {
+  try {
+    const episodeUrl =
+      `${BASE}/${showSlug}/bolum/${episode}`;
+
+    const page = await http.get(episodeUrl, {
+      headers: {
+        Referer: `${BASE}/`,
+      },
+    });
+
+    const html = page.data;
+
+    const match =
+      html.match(/video_id["']?\s*[:=]\s*["']?(\d+)/i);
+
+    if (!match) {
+      return null;
+    }
+
+    const videoId = match[1];
+
+    const response = await http.post(
+      `${BASE}/ajax/stream`,
+      `video_id=${encodeURIComponent(videoId)}`,
+      {
+        headers: {
+          'User-Agent': UA,
+          'Content-Type':
+            'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest',
+          Origin: BASE,
+          Referer: episodeUrl,
+        },
+      }
+    );
+
+    const data = response.data;
+
+    if (
+      !data ||
+      data.code !== 200 ||
+      !data.video_url
+    ) {
+      return null;
+    }
+
+    return {
+      url: data.video_url,
+      episodeUrl,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function stream(id) {
+  try {
+    // Exemple : tt1234567:1:5
+    const parts = String(id).split(':');
+
+    const imdbId = parts[0];
+
+    let season = 1;
+    let episode = 1;
+
+    if (parts.length >= 3) {
+      season = parseInt(parts[parts.length - 2], 10) || 1;
+      episode = parseInt(parts[parts.length - 1], 10) || 1;
+    } else if (parts.length === 2) {
+      episode = parseInt(parts[1], 10) || 1;
+    }
+
+    if (!/^tt\d+$/i.test(imdbId)) {
+      return [];
+    }
+
+    const title = await getCinemetaTitle(imdbId);
+
+    if (!title) {
+      console.log('NOW TV : titre Cinemeta introuvable pour', imdbId);
+      return [];
+    }
+
+    const slugs = await getNowSlugs(title);
+
+    for (const slug of slugs) {
+      const result = await getVideoUrl(slug, episode);
+
+      if (!result) continue;
+
+      console.log(
+        `NOW TV trouvé : ${title} → ${slug} → épisode ${episode}`
+      );
+
+      return [
+        playable({
+          name: 'NOW TV Türkiye',
+          title: `NOW TV Türkiye · ${title} · Bölüm ${episode}`,
+          url: result.url,
+          headers: {
+            'User-Agent': UA,
+            Referer: result.episodeUrl,
+          },
+        }),
+      ];
+    }
+
+    console.log(
+      `NOW TV : aucun épisode trouvé pour ${title} (${season}x${episode})`
+    );
+
+    return [];
+  } catch (e) {
+    console.error('NOW TV:', e.message);
+    return [];
+  }
 }
 
 module.exports = {
-    name: "NOW TV Türkiye",
-    getEpisodes,
-    getStream
+  prefix: 'tt',
+  types: ['series'],
+  stream,
 };
