@@ -106,54 +106,83 @@ async function tryXfs(url, html, referer) {
 
 // Pages XFileSharing : le lien "Download" mène à un formulaire (op=download_orig) dont l'envoi donne le fichier mp4.
 // Le lien obtenu est lié à l'adresse IP qui a envoyé le formulaire : c'est pourquoi il doit passer par le relais.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function xfsAttempt(dl, pageUrl) {
+  const origin = new URL(dl).origin;
+  const page = await axios.get(dl, {
+    timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+    headers: { 'User-Agent': UA, Referer: pageUrl },
+  });
+  const cookie = (page.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+  const h = String(page.data);
+  const form = h.match(/<form[^>]*method=["']?post["']?[^>]*>([\s\S]*?)<\/form>/i);
+  if (!form) return { body: h, nolink: true };
+  const params = new URLSearchParams();
+  for (const m of form[1].matchAll(/<input[^>]+>/gi)) {
+    const name = m[0].match(/name=["']([^"']+)["']/i);
+    const val = m[0].match(/value=["']([^"']*)["']/i);
+    if (name) params.append(name[1], val ? val[1] : '');
+  }
+  const headers = { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (cookie) headers.Cookie = cookie;
+  const r = await axios.post(dl, params.toString(), {
+    maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text', headers,
+  });
+  const body = String(r.data || '');
+  const link = r.headers.location || candidates(body, dl)[0];
+  console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : HTTP ${r.status}, ${link ? 'lien obtenu' : /security error/i.test(body) ? 'Security error' : 'pas de lien'}`);
+  return { body, link: link ? new URL(link, dl).href : null, origin };
+}
+
 async function xfsDownload(html, pageUrl) {
   const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
-  const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))]; // HD d'abord
-  for (const dl of ordered.slice(0, 2)) {
-    try {
-      const origin = new URL(dl).origin;
-      const page = await axios.get(dl, {
-        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
-        headers: { 'User-Agent': UA, Referer: pageUrl },
-      });
-      const h = String(page.data);
-      const cookie = (page.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
-      let current = h;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        const form = current.match(/<form[^>]*method=["']?post["']?[^>]*>([\s\S]*?)<\/form>/i);
-        if (!form) {
-          console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : pas de formulaire`);
+  const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))].slice(0, 2); // HD d'abord
+  for (let i = 0; i < ordered.length; i++) {
+    const dl = ordered[i];
+    const isLast = i === ordered.length - 1;
+    for (let tryNo = 0; tryNo < (isLast ? 2 : 1); tryNo++) {
+      try {
+        const res = await xfsAttempt(dl, pageUrl);
+        if (res.link) {
+          return [{ url: res.link, kind: 'MP4', headers: { Referer: res.origin + '/', 'User-Agent': UA } }];
+        }
+        if (!/security error/i.test(res.body)) {
+          console.log(`  ↳ EXTRAIT RÉPONSE : ${res.body.replace(/\s+/g, ' ').slice(0, 1200)}`);
           break;
         }
-        const params = new URLSearchParams();
-        for (const m of form[1].matchAll(/<input[^>]+>/gi)) {
-          const name = m[0].match(/name=["']([^"']+)["']/i);
-          const val = m[0].match(/value=["']([^"']*)["']/i);
-          if (name) params.append(name[1], val ? val[1] : '');
-        }
-        if (attempt > 1) await new Promise((res) => setTimeout(res, 1500));
-        const r = await axios.post(dl, params.toString(), {
-          maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text',
-          headers: { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded', ...(cookie ? { Cookie: cookie } : {}) },
-        });
-        const body = String(r.data || '');
-        const link = r.headers.location || candidates(body, dl)[0];
-        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} (essai ${attempt}) : HTTP ${r.status}, ${link ? 'lien obtenu' : 'pas de lien'}`);
-        if (link) {
-          return [{
-            url: new URL(link, dl).href,
-            kind: 'MP4',
-            headers: { Referer: origin + '/', 'User-Agent': UA },
-          }];
-        }
-        if (attempt === 3) console.log(`  ↳ EXTRAIT RÉPONSE : ${body.replace(/\s+/g, ' ').slice(0, 1500)}`);
-        current = body; // la page d'erreur contient un nouveau formulaire (nouveau hash) : on le renvoie
+        if (isLast && tryNo === 0) await sleep(1200); // nouvelle tentative avec un formulaire neuf
+      } catch (e) {
+        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+        break;
       }
-    } catch (e) {
-      console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
     }
   }
   return [];
+}
+
+// Dailymotion : l'API publique "metadata" donne un flux HLS lisible dans n'importe quel lecteur.
+const DAILYMOTION = /(^|\.)(dailymotion\.com|dai\.ly)$/i;
+function dailymotionId(url) {
+  const u = new URL(url);
+  const v = u.searchParams.get('video');
+  if (v) return v;
+  const m = u.pathname.match(/\/(?:embed\/)?video\/([a-z0-9]+)/i) || (u.hostname === 'dai.ly' ? u.pathname.match(/^\/([a-z0-9]+)/i) : null);
+  return m ? m[1] : null;
+}
+async function resolveDailymotion(url) {
+  const id = dailymotionId(url);
+  if (!id) return [];
+  const headers = { 'User-Agent': UA, Referer: 'https://www.dailymotion.com/', Origin: 'https://www.dailymotion.com' };
+  const { data } = await axios.get(`https://www.dailymotion.com/player/metadata/video/${id}`, { timeout: 5000, headers });
+  const auto = data && data.qualities && data.qualities.auto;
+  const hls = auto && (auto.find((q) => /mpegurl/i.test(q.type || '')) || auto[0]);
+  if (!hls || !hls.url) {
+    const why = data && data.error ? `${data.error.type || ''} ${data.error.title || ''}`.trim() : 'aucun flux';
+    console.log(`  ↳ Dailymotion ${id} : ${why}`);
+    return [];
+  }
+  return [{ url: hls.url, kind: 'HLS', headers }];
 }
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
@@ -161,6 +190,7 @@ async function resolveEmbed(url, referer) {
   let origin;
   try { origin = new URL(url).origin; } catch { return []; }
   try {
+    if (DAILYMOTION.test(new URL(url).hostname)) return await resolveDailymotion(url);
     if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
     const { data } = await axios.get(url, {
       timeout: 4000,
