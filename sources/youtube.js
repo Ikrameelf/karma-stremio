@@ -15,11 +15,17 @@ const KEY = process.env.YOUTUBE_API_KEY || '';
 const playlistCache = new Map(); // playlistId -> { at, videos }
 const TTL = 6 * 3600 * 1000;
 
-const slugOf = (p) => decodeURIComponent(String(p).split('?')[0].split('/').filter(Boolean).pop() || '').toLowerCase();
+// "Senden Daha Güzel", "senden-daha-guzel" et /series/senden-daha-guzel/ donnent tous le même identifiant.
+const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/ı/g, 'i').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const slugOf = (ref) => {
+  const r = String(ref || '');
+  return norm(r.includes('/') ? decodeURIComponent(r.split('?')[0].split('/').filter(Boolean).pop() || '') : r);
+};
 
 function entryFor(seriesPath) {
   const slug = slugOf(seriesPath);
-  const key = Object.keys(config).find((k) => !k.startsWith('_') && k.toLowerCase() === slug);
+  const key = Object.keys(config).find((k) => !k.startsWith('_') && norm(k) === slug);
   if (!key) return null;
   const v = config[key];
   return typeof v === 'string' ? { playlist: v, offset: 0 } : { playlist: v.playlist, offset: v.offset || 0 };
