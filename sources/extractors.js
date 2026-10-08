@@ -147,23 +147,33 @@ async function xfsAttempt(dl, pageUrl) {
   }
 }
 
+// Lance n tentatives en parallèle et retourne la première qui obtient un lien (null si toutes échouent).
+function firstLink(dl, pageUrl, n) {
+  return new Promise((resolve) => {
+    let left = n;
+    for (let i = 0; i < n; i++) {
+      xfsAttempt(dl, pageUrl)
+        .catch((e) => {
+          console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+          return null;
+        })
+        .then((res) => {
+          if (res && res.link) resolve(res);
+          else if (--left === 0) resolve(null);
+        });
+    }
+  });
+}
+
 async function xfsDownload(html, pageUrl) {
   const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
   const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))].slice(0, 2); // HD d'abord
   for (const dl of ordered) {
-    for (let tryNo = 0; tryNo < 3; tryNo++) { // "Security error" est intermittent : on réessaie avec un formulaire neuf
-      try {
-        const res = await xfsAttempt(dl, pageUrl);
-        if (res.link) {
-          return [{ url: res.link, kind: 'MP4', headers: { Referer: res.origin + '/', 'User-Agent': UA } }];
-        }
-        if (!/security error/i.test(res.body)) {
-          console.log(`  ↳ EXTRAIT RÉPONSE : ${res.body.replace(/\s+/g, ' ').slice(0, 1200)}`);
-          break;
-        }
-      } catch (e) {
-        console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
-        break;
+    // "Security error" semble aléatoire (environ 1 réponse sur 3 réussit) : 2 vagues de 3 tentatives en parallèle.
+    for (let wave = 0; wave < 2; wave++) {
+      const res = await firstLink(dl, pageUrl, 3);
+      if (res) {
+        return [{ url: res.link, kind: 'MP4', headers: { Referer: res.origin + '/', 'User-Agent': UA } }];
       }
     }
   }
