@@ -61,10 +61,23 @@ async function playlistVideos(playlistId) {
 
 // Retourne l'identifiant de la vidéo YouTube de l'épisode, ou null.
 async function findVideo(seriesPath, epNumber) {
-  const entry = seriesPath && epNumber ? entryFor(seriesPath) : null;
-  if (!entry || !KEY || !entry.playlist) return null;
+  if (!seriesPath || !epNumber) {
+    console.log('[yt] identifiant d\'épisode sans série ni numéro : recherche YouTube impossible');
+    return null;
+  }
+  const slug = slugOf(seriesPath);
+  const entry = entryFor(seriesPath);
+  if (!entry || !entry.playlist) {
+    console.log(`[yt] "${slug}" absent de youtube-series.json (séries lues : ${Object.keys(config).filter((k) => !k.startsWith('_')).join(', ') || 'aucune'})`);
+    return null;
+  }
+  if (!KEY) {
+    console.log('[yt] YOUTUBE_API_KEY non définie sur Render');
+    return null;
+  }
   const videos = await playlistVideos(entry.playlist);
   const hit = videos.find((v) => v.ep === epNumber + entry.offset);
+  console.log(`[yt] ${slug} épisode ${epNumber} : ${hit ? 'trouvé (' + hit.id + ')' : `introuvable parmi ${videos.length} vidéo(s), ${videos.filter((v) => v.ep).length} avec un numéro`}`);
   return hit ? hit.id : null;
 }
 
