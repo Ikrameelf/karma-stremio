@@ -3,7 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
-const youtube = require('./youtube');
+const { streamsFor: dailymotionStreams } = require('./dailymotion');
 
 const BASE = 'https://yoturkish.to';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -77,7 +77,8 @@ async function meta(id) {
     const a = $(el);
     const n = parseInt((a.text().match(/Episode\s*(\d+)/i) || [])[1], 10) || i + 1;
     return {
-      id: `yot:ep:${enc(pathOf(a.attr('href')))}:${enc(path)}:${n}`,
+      // après le "." : nom de la série et numéro d'épisode (utilisés pour chercher sur Dailymotion)
+      id: 'yot:ep:' + enc(pathOf(a.attr('href'))) + '.' + enc(`${name}|${n}`),
       title: `Episode ${n}`,
       season: 1,
       episode: n,
@@ -119,7 +120,10 @@ function collectStatic(html) {
 // Équivalent du WebViewResolver de CloudStream : ouvre la page, clique les onglets, capte les liens.
 async function collectWithBrowser(url) {
   let chromium;
-  try { ({ chromium } = require('playwright')); } catch { return []; }
+  try { ({ chromium } = require('playwright')); } catch {
+    console.error('[yot] playwright non installé : npm i playwright && npx playwright install chromium');
+    return [];
+  }
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ userAgent: UA });
@@ -149,54 +153,75 @@ async function collectWithBrowser(url) {
   }
 }
 
-async function stream(id) {
-  const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
-  const epUrl = BASE + dec(parts[2]);
-  const seriesPath = parts[3] ? dec(parts[3]) : null;
-  const epNum = parseInt(parts[4], 10) || null;
-  let html;
-  try {
-    html = await getHtml(epUrl);
-  } catch (e) {
-    console.log(`YoTurkish ${epUrl} : page inaccessible (${e.response ? 'HTTP ' + e.response.status + ', serveur : ' + (e.response.headers['server'] || '?') : e.code || e.message})`);
-    throw e;
-  }
-
-  let candidates = collectStatic(html);
-  if (!candidates.length || process.env.FORCE_BROWSER) {
-    try {
-      candidates = [...new Set([...candidates, ...(await collectWithBrowser(epUrl))])];
-    } catch (e) {
-      console.error('navigateur indisponible :', e.message);
-    }
-  }
-
-  const streams = [];
-  try {
-    const ytId = await youtube.findVideo(seriesPath, epNum);
-    if (ytId) streams.push({ name: 'YoTurkish', title: 'YouTube (chaîne officielle)', ytId });
-  } catch (e) {
-    console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
-  }
-  const seen = new Set();
+// Transforme une liste d'URLs candidates en flux Stremio (directs si possible).
+async function processCandidates(candidates, epUrl, streams, seen) {
   for (const url of candidates) {
+    if (!/^https?:/i.test(url) || /\/cdn-cgi\//i.test(url)) continue; // blob:, pubs/anti-bot Cloudflare
     if (seen.has(url)) continue;
     seen.add(url);
+    console.log('[yot] candidat :', url);
+
     if (/\.m3u8|\/sora\//i.test(url)) {
       streams.push(directStream(url, 'Direct (HLS)'));
       continue;
     }
-    const links = await resolveEmbed(url, epUrl);
-    if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
-    else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
+
+    let links = [];
+    try {
+      links = await resolveEmbed(url, epUrl, { sniff: !streams.some((x) => x.url) });
+    } catch (e) {
+      console.error('[yot] erreur resolveEmbed :', url, e.message);
+    }
+
+    if (links.length) {
+      links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
+    } else {
+      console.log('[yot] embed NON résolu (à gérer dans extractors.js) :', url);
+      streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
+    }
   }
-  console.log(`YoTurkish ${epUrl} : ${candidates.length} lecteur(s) trouvé(s), ${streams.filter((x) => x.ytId).length} YouTube, ${streams.filter((x) => x.url).length} direct(s), ${streams.filter((x) => x.externalUrl).length} navigateur`);
-  const ytLinks = streams.filter((x) => x.ytId);
-  const directLinks = streams.filter((x) => x.url);
-  const browserLinks = streams.filter((x) => x.externalUrl);
-  // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
-  const showBrowser = process.env.SHOW_BROWSER_LINKS;
-  return [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
+}
+
+async function stream(id) {
+  const [pathPart, extra] = id.slice('yot:ep:'.length).split('.');
+  const epUrl = BASE + dec(pathPart);
+  const html = await getHtml(epUrl);
+
+  // Infos série + épisode pour Dailymotion (absentes sur les anciens ids : Dailymotion est alors ignoré)
+  let epInfo = null;
+  if (extra) {
+    const raw = dec(extra);
+    const cut = raw.lastIndexOf('|');
+    if (cut > 0) epInfo = { name: raw.slice(0, cut), episode: Number(raw.slice(cut + 1)) };
+  }
+
+  const streams = [];
+  const seen = new Set();
+
+  // 1) Liens trouvés directement dans le HTML
+  await processCandidates(collectStatic(html), epUrl, streams, seen);
+
+  // 2) Navigateur : s'il n'y a aucun flux lisible, ou si FORCE_BROWSER est défini
+  const hasPlayable = () => streams.some((x) => x.url);
+  if (!hasPlayable() || process.env.FORCE_BROWSER) {
+    try {
+      await processCandidates(await collectWithBrowser(epUrl), epUrl, streams, seen);
+    } catch (e) {
+      console.error('[yot] navigateur indisponible :', e.message);
+    }
+  }
+
+  // 3) Flux Dailymotion (recherche par nom de série + numéro d'épisode)
+  if (epInfo && !process.env.DISABLE_DAILYMOTION) {
+    try {
+      streams.push(...(await dailymotionStreams(epInfo.name, epInfo.episode)));
+    } catch (e) {
+      console.error('[dm] erreur :', e.message);
+    }
+  }
+
+  const playableLinks = streams.filter((x) => x.url);
+  return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : streams;
 }
 
 module.exports = {
