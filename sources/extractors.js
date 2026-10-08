@@ -1,6 +1,7 @@
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
+const https = require('https');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const VIDEO = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
@@ -108,10 +109,10 @@ async function tryXfs(url, html, referer) {
 // Le lien obtenu est lié à l'adresse IP qui a envoyé le formulaire : c'est pourquoi il doit passer par le relais.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function xfsAttempt(dl, pageUrl) {
+async function xfsAttemptWith(dl, pageUrl, agent) {
   const origin = new URL(dl).origin;
   const page = await axios.get(dl, {
-    timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+    timeout: 4000, maxContentLength: 1500000, responseType: 'text', httpsAgent: agent,
     headers: { 'User-Agent': UA, Referer: pageUrl },
   });
   const cookie = (page.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
@@ -127,7 +128,7 @@ async function xfsAttempt(dl, pageUrl) {
   const headers = { 'User-Agent': UA, Referer: dl, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' };
   if (cookie) headers.Cookie = cookie;
   const r = await axios.post(dl, params.toString(), {
-    maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text', headers,
+    maxRedirects: 0, validateStatus: () => true, timeout: 6000, maxContentLength: 1500000, responseType: 'text', headers, httpsAgent: agent,
   });
   const body = String(r.data || '');
   const link = r.headers.location || candidates(body, dl)[0];
@@ -135,13 +136,22 @@ async function xfsAttempt(dl, pageUrl) {
   return { body, link: link ? new URL(link, dl).href : null, origin };
 }
 
+// Le code de validation du formulaire est lié à l'adresse IP de départ : on envoie la page ET le formulaire
+// sur la même connexion TCP, pour que le serveur voie toujours la même adresse.
+async function xfsAttempt(dl, pageUrl) {
+  const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    return await xfsAttemptWith(dl, pageUrl, agent);
+  } finally {
+    agent.destroy();
+  }
+}
+
 async function xfsDownload(html, pageUrl) {
   const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
   const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))].slice(0, 2); // HD d'abord
-  for (let i = 0; i < ordered.length; i++) {
-    const dl = ordered[i];
-    const isLast = i === ordered.length - 1;
-    for (let tryNo = 0; tryNo < (isLast ? 2 : 1); tryNo++) {
+  for (const dl of ordered) {
+    for (let tryNo = 0; tryNo < 3; tryNo++) { // "Security error" est intermittent : on réessaie avec un formulaire neuf
       try {
         const res = await xfsAttempt(dl, pageUrl);
         if (res.link) {
@@ -151,7 +161,6 @@ async function xfsDownload(html, pageUrl) {
           console.log(`  ↳ EXTRAIT RÉPONSE : ${res.body.replace(/\s+/g, ' ').slice(0, 1200)}`);
           break;
         }
-        if (isLast && tryNo === 0) await sleep(1200); // nouvelle tentative avec un formulaire neuf
       } catch (e) {
         console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
         break;
