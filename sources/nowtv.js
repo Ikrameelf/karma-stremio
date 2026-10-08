@@ -14,11 +14,8 @@ const http = axios.create({
   },
 });
 
-const enc = (s) => Buffer.from(s).toString('base64url');
-const dec = (s) => Buffer.from(s, 'base64url').toString();
-
-function slugify(s) {
-  return String(s || '')
+function slugify(value) {
+  return String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
@@ -30,10 +27,6 @@ function slugify(s) {
     .replace(/ü/g, 'u')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function cleanTitle(s) {
-  return slugify(s).replace(/-/g, '');
 }
 
 async function getCinemetaTitle(imdbId) {
@@ -48,26 +41,32 @@ async function getCinemetaTitle(imdbId) {
       (data.meta.name || data.meta.originalName)
     ) || '';
   } catch (e) {
-    console.log('NOW TV Cinemeta:', e.message);
+    console.log(
+      'NOW TV Cinemeta:',
+      e.message
+    );
+
     return '';
   }
 }
 
-async function getNowSlugs(title) {
+function getCandidateSlugs(title) {
   const candidates = [];
 
   const add = (value) => {
     const slug = slugify(value);
-    if (slug && !candidates.includes(slug)) {
+
+    if (
+      slug &&
+      !candidates.includes(slug)
+    ) {
       candidates.push(slug);
     }
   };
 
   add(title);
 
-  // Quelques variantes fréquentes
-  add(String(title).replace(/^The-/i, ''));
-  add(String(title).replace(/^Bir-/i, ''));
+  // Variantes simples de titres
   add(String(title).replace(/^the\s+/i, ''));
   add(String(title).replace(/^bir\s+/i, ''));
 
@@ -79,16 +78,22 @@ async function getVideoUrl(showSlug, episode) {
     const episodeUrl =
       `${BASE}/${showSlug}/bolum/${episode}`;
 
-    const page = await http.get(episodeUrl, {
-      headers: {
-        Referer: `${BASE}/`,
-      },
-    });
+    const page = await http.get(
+      episodeUrl,
+      {
+        headers: {
+          Referer: `${BASE}/`,
+        },
+      }
+    );
 
     const html = page.data;
 
+    // NOW place le video_id dans la page de l'épisode.
     const match =
-      html.match(/video_id["']?\s*[:=]\s*["']?(\d+)/i);
+      html.match(
+        /video_id["']?\s*[:=]\s*["']?(\d+)/i
+      );
 
     if (!match) {
       return null;
@@ -96,6 +101,7 @@ async function getVideoUrl(showSlug, episode) {
 
     const videoId = match[1];
 
+    // Endpoint utilisé par le lecteur NOW
     const response = await http.post(
       `${BASE}/ajax/stream`,
       `video_id=${encodeURIComponent(videoId)}`,
@@ -132,7 +138,17 @@ async function getVideoUrl(showSlug, episode) {
 
 async function stream(id) {
   try {
-    // Exemple : tt1234567:1:5
+    /*
+     * Les IDs utilisés par ton addon sont de la forme :
+     *
+     * tt1234567:1:5
+     *
+     * soit :
+     * IMDb ID : tt1234567
+     * Saison  : 1
+     * Épisode : 5
+     */
+
     const parts = String(id).split(':');
 
     const imdbId = parts[0];
@@ -141,29 +157,54 @@ async function stream(id) {
     let episode = 1;
 
     if (parts.length >= 3) {
-      season = parseInt(parts[parts.length - 2], 10) || 1;
-      episode = parseInt(parts[parts.length - 1], 10) || 1;
+      season =
+        parseInt(
+          parts[parts.length - 2],
+          10
+        ) || 1;
+
+      episode =
+        parseInt(
+          parts[parts.length - 1],
+          10
+        ) || 1;
     } else if (parts.length === 2) {
-      episode = parseInt(parts[1], 10) || 1;
+      episode =
+        parseInt(
+          parts[1],
+          10
+        ) || 1;
     }
 
     if (!/^tt\d+$/i.test(imdbId)) {
       return [];
     }
 
-    const title = await getCinemetaTitle(imdbId);
+    const title =
+      await getCinemetaTitle(imdbId);
 
     if (!title) {
-      console.log('NOW TV : titre Cinemeta introuvable pour', imdbId);
+      console.log(
+        'NOW TV : titre Cinemeta introuvable pour',
+        imdbId
+      );
+
       return [];
     }
 
-    const slugs = await getNowSlugs(title);
+    const slugs =
+      getCandidateSlugs(title);
 
     for (const slug of slugs) {
-      const result = await getVideoUrl(slug, episode);
+      const result =
+        await getVideoUrl(
+          slug,
+          episode
+        );
 
-      if (!result) continue;
+      if (!result) {
+        continue;
+      }
 
       console.log(
         `NOW TV trouvé : ${title} → ${slug} → épisode ${episode}`
@@ -172,7 +213,8 @@ async function stream(id) {
       return [
         playable({
           name: 'NOW TV Türkiye',
-          title: `NOW TV Türkiye · ${title} · Bölüm ${episode}`,
+          title:
+            `NOW TV Türkiye · ${title} · Bölüm ${episode}`,
           url: result.url,
           headers: {
             'User-Agent': UA,
@@ -188,7 +230,11 @@ async function stream(id) {
 
     return [];
   } catch (e) {
-    console.error('NOW TV:', e.message);
+    console.error(
+      'NOW TV:',
+      e.message
+    );
+
     return [];
   }
 }
