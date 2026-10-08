@@ -68,6 +68,7 @@ async function resolveDood(url) {
 // Pages de téléchargement type XFileSharing (ex. engifuosi.com/d/<code>.html) : on devine l'adresse du lecteur
 // à partir du code du fichier, sur le même site et sur les hôtes cités dans la page (ex. tokvoy.com).
 async function tryXfs(url, html, referer) {
+  if (/href="https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z]"/i.test(String(html))) return xfsDownload(html, url);
   const u = new URL(url);
   const m = u.pathname.match(/\/(?:d|f|e|v)\/([a-z0-9]{8,})/i);
   if (!m) return [];
@@ -147,37 +148,41 @@ async function xfsAttempt(dl, pageUrl) {
   }
 }
 
-// Lance n tentatives en parallèle et retourne la première qui obtient un lien (null si toutes échouent).
-function firstLink(dl, pageUrl, n) {
-  return new Promise((resolve) => {
-    let left = n;
-    for (let i = 0; i < n; i++) {
-      xfsAttempt(dl, pageUrl)
-        .catch((e) => {
-          console.log(`  ↳ TÉLÉCHARGEMENT ${dl} : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
-          return null;
-        })
-        .then((res) => {
-          if (res && res.link) resolve(res);
-          else if (--left === 0) resolve(null);
-        });
-    }
-  });
-}
+// Le site limite le nombre de requêtes (HTTP 429 quand on en envoie trop en parallèle) : tentatives une par une,
+// en alternant HD / Normal, avec arrêt immédiat si le site répond 429, et mémorisation du résultat.
+const xfsCache = new Map(); // adresse de la page -> { links, until }
 
 async function xfsDownload(html, pageUrl) {
-  const links = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
-  const ordered = [...links.filter((l) => /_h$/.test(l)), ...links.filter((l) => !/_h$/.test(l))].slice(0, 2); // HD d'abord
-  for (const dl of ordered) {
-    // "Security error" semble aléatoire (environ 1 réponse sur 3 réussit) : 2 vagues de 3 tentatives en parallèle.
-    for (let wave = 0; wave < 2; wave++) {
-      const res = await firstLink(dl, pageUrl, 3);
-      if (res) {
-        return [{ url: res.link, kind: 'MP4', headers: { Referer: res.origin + '/', 'User-Agent': UA } }];
+  const hit = xfsCache.get(pageUrl);
+  if (hit && Date.now() < hit.until) return hit.links;
+
+  const all = [...String(html).matchAll(/href="(https?:\/\/[^"]+\/d\/[a-z0-9]+_[a-z])"/gi)].map((m) => m[1]);
+  const hd = all.find((l) => /_h$/.test(l));
+  const normal = all.find((l) => /_n$/.test(l)) || all.find((l) => !/_h$/.test(l));
+  const order = [hd, normal, hd, normal, hd, normal].filter(Boolean);
+
+  let result = [];
+  for (let i = 0; i < order.length; i++) {
+    try {
+      const res = await xfsAttempt(order[i], pageUrl);
+      if (res.link) {
+        result = [{ url: res.link, kind: 'MP4', headers: { Referer: res.origin + '/', 'User-Agent': UA } }];
+        break;
       }
+      if (!/security error/i.test(res.body)) {
+        console.log(`  ↳ EXTRAIT RÉPONSE : ${res.body.replace(/\s+/g, ' ').slice(0, 1200)}`);
+        break;
+      }
+    } catch (e) {
+      const status = e.response && e.response.status;
+      console.log(`  ↳ TÉLÉCHARGEMENT ${order[i]} : ${status ? 'HTTP ' + status : e.code || e.message}`);
+      if (status === 429) break; // trop de requêtes : inutile d'insister
     }
+    await sleep(250);
   }
-  return [];
+  // Succès gardé 10 min ; échec gardé 45 s (évite de marteler le site quand Stremio redemande).
+  xfsCache.set(pageUrl, { links: result, until: Date.now() + (result.length ? 600000 : 45000) });
+  return result;
 }
 
 // Dailymotion : l'API publique "metadata" donne un flux HLS lisible dans n'importe quel lecteur.
