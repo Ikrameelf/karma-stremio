@@ -100,7 +100,7 @@ app.get('/debug', async (req, res) => {
 });
 
 // Teste un épisode YoTurkish sans passer par Stremio :
-// /debug/yoturkish?url=https://yoturkish.to/hercai-episode-2/
+// /debug/yoturkish?url=https://yoturkish.to/hercai-episode-2/&serie=hercai&ep=2
 app.get('/debug/yoturkish', async (req, res) => {
   const src = sources.find((s) => s.prefix === 'yot:');
   if (!src) return res.json({ erreur: 'source YoTurkish non chargée' });
@@ -109,7 +109,11 @@ app.get('/debug/yoturkish', async (req, res) => {
   catch { return res.json({ erreur: 'ajoutez ?url=<adresse de la page de l\'épisode>' }); }
   const t = Date.now();
   try {
-    const streams = await src.stream('yot:ep:' + Buffer.from(path).toString('base64url'), 'series');
+    // &serie=<nom dans l'adresse de la série>&ep=<numéro> : permet de tester aussi le lien YouTube.
+    const enc = (v) => Buffer.from(v).toString('base64url');
+    let id = 'yot:ep:' + enc(path);
+    if (req.query.serie && req.query.ep) id += `:${enc('/series/' + req.query.serie + '/')}:${parseInt(req.query.ep, 10) || 1}`;
+    const streams = await src.stream(id, 'series');
     const describe = (x) => ({
       type: x.url ? 'DIRECT' : x.ytId ? 'YOUTUBE' : 'NAVIGATEUR',
       name: x.name, title: x.title,
