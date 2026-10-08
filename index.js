@@ -53,6 +53,10 @@ builder.defineMetaHandler(async ({ id }) => {
   catch (e) { console.error('meta', e.message); return { meta: null }; }
 });
 
+// Les liens "navigateur" ne sont gardés que s'il n'y a aucun lien lisible directement (ou si SHOW_BROWSER_LINKS=1).
+const finalize = (streams) =>
+  streams.some((x) => x.url) && !process.env.SHOW_BROWSER_LINKS ? streams.filter((x) => !x.externalUrl) : streams;
+
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve([]), ms))]);
 
 // Plusieurs sources peuvent partager le même préfixe (Movix et NOW TV utilisent tous deux les IDs IMDb "tt") :
@@ -63,12 +67,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     withTimeout(Promise.resolve().then(() => s.stream(id, type)), 20000)
       .catch((e) => { console.error('stream', s.prefix, e.message); return []; })
   ));
-  let streams = results.flat().filter(Boolean);
-  // Les liens "navigateur" ne sont gardés que s'il n'y a aucun lien lisible directement (ou si SHOW_BROWSER_LINKS=1).
-  if (streams.some((x) => x.url) && !process.env.SHOW_BROWSER_LINKS) {
-    streams = streams.filter((x) => !x.externalUrl);
-  }
-  return { streams };
+  return { streams: finalize(results.flat().filter(Boolean)) };
 });
 
 const app = express();
@@ -98,6 +97,28 @@ app.get('/debug', async (req, res) => {
     yoturkish_catalogue: await probe('https://yoturkish.to/series/'),
     movix_address: await probe('https://movix.online/address.json'),
   });
+});
+
+// Teste un épisode YoTurkish sans passer par Stremio :
+// /debug/yoturkish?url=https://yoturkish.to/hercai-episode-2/
+app.get('/debug/yoturkish', async (req, res) => {
+  const src = sources.find((s) => s.prefix === 'yot:');
+  if (!src) return res.json({ erreur: 'source YoTurkish non chargée' });
+  let path;
+  try { const u = new URL(String(req.query.url || '')); path = u.pathname + u.search; }
+  catch { return res.json({ erreur: 'ajoutez ?url=<adresse de la page de l\'épisode>' }); }
+  const t = Date.now();
+  try {
+    const streams = await src.stream('yot:ep:' + Buffer.from(path).toString('base64url'), 'series');
+    const describe = (x) => ({
+      type: x.url ? 'DIRECT' : x.ytId ? 'YOUTUBE' : 'NAVIGATEUR',
+      name: x.name, title: x.title,
+      lien: String(x.url || x.externalUrl || x.ytId || '').slice(0, 140),
+    });
+    res.json({ duree_ms: Date.now() - t, recu_de_la_source: streams.map(describe), envoye_a_stremio: finalize(streams).map(describe) });
+  } catch (e) {
+    res.json({ duree_ms: Date.now() - t, erreur: e.message });
+  }
 });
 
 app.use('/', getRouter(builder.getInterface()));
