@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
 const { streamsFor: dailymotionStreams } = require('./dailymotion');
+const youtube = require('./youtube');
 
 const BASE = 'https://yoturkish.to';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -77,7 +78,7 @@ async function meta(id) {
     const a = $(el);
     const n = parseInt((a.text().match(/Episode\s*(\d+)/i) || [])[1], 10) || i + 1;
     return {
-      // après le "." : nom de la série et numéro d'épisode (utilisés pour chercher sur Dailymotion)
+      // après le "." : nom de la série et numéro d'épisode (utilisés pour chercher sur YouTube et Dailymotion)
       id: 'yot:ep:' + enc(pathOf(a.attr('href'))) + '.' + enc(`${name}|${n}`),
       title: `Episode ${n}`,
       season: 1,
@@ -187,7 +188,7 @@ async function stream(id) {
   const epUrl = BASE + dec(pathPart);
   const html = await getHtml(epUrl);
 
-  // Infos série + épisode pour Dailymotion (absentes sur les anciens ids : Dailymotion est alors ignoré)
+  // Infos série + épisode pour YouTube et Dailymotion (absentes sur les anciens ids : ils sont alors ignorés)
   let epInfo = null;
   if (extra) {
     const raw = dec(extra);
@@ -197,6 +198,18 @@ async function stream(id) {
 
   const streams = [];
   const seen = new Set();
+
+  // 0) YouTube : chaîne officielle, via la playlist indiquée dans youtube-series.json (lu dans le lecteur YouTube)
+  if (epInfo) {
+    try {
+      const ytId = await youtube.findVideo(epInfo.name, epInfo.episode);
+      if (ytId) streams.push({ name: 'YoTurkish', title: 'YouTube (chaîne officielle)', ytId });
+    } catch (e) {
+      console.log('[yt] erreur :', e.response ? `HTTP ${e.response.status}` : e.message);
+    }
+  } else {
+    console.log('[yt] ancien identifiant d\'épisode (sans nom de série) : rouvrez la série dans Stremio');
+  }
 
   // 1) Liens trouvés directement dans le HTML
   await processCandidates(collectStatic(html), epUrl, streams, seen);
@@ -220,8 +233,8 @@ async function stream(id) {
     }
   }
 
-  const playableLinks = streams.filter((x) => x.url);
-  return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : streams;
+  // Les liens YouTube et directs sont toujours gardés ; les liens "navigateur" seulement s'il n'y a aucun lien direct.
+  return hasPlayable() && !process.env.SHOW_BROWSER_LINKS ? streams.filter((x) => !x.externalUrl) : streams;
 }
 
 module.exports = {
