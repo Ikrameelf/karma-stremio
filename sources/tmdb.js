@@ -1,0 +1,82 @@
+// Métadonnées TMDB pour les fiches de séries YoTurkish : affiche, fond, résumé, année, genres, casting (et note si le site n'en donne pas).
+// Sécurité : si la clé manque, si la série n'est pas trouvée avec certitude ou si TMDB répond mal, la fiche d'origine est
+// renvoyée telle quelle. Les identifiants, le titre et la liste des épisodes ne sont jamais modifiés.
+// Variables d'environnement : TMDB_API_KEY (déjà utilisée par Movix), TMDB_LANG (défaut fr-FR), TMDB_META=0 pour désactiver.
+const axios = require('axios');
+
+const KEY = (process.env.TMDB_API_KEY || '').trim().replace(/^["']+|["']+$/g, '');
+const LANG = process.env.TMDB_LANG || 'fr-FR';
+const API = 'https://api.themoviedb.org/3';
+const IMG = 'https://image.tmdb.org/t/p';
+const TTL = 24 * 3600 * 1000;    // série trouvée : gardée 24 h
+const MISS_TTL = 3600 * 1000;    // série introuvable : on réessaie dans 1 h
+const cache = new Map();         // "titre|année" -> { at, d }
+
+// "Senden Daha Güzel", "senden-daha-guzel" et "SENDEN DAHA GÜZEL" donnent la même chaîne.
+const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/ı/g, 'i').replace(/[^a-z0-9]+/g, ' ').trim();
+const cleanTitle = (s) => String(s || '').replace(/[([].*?[)\]]/g, '').trim();
+
+const get = (path, params) => axios.get(API + path, {
+  params: { api_key: KEY, language: LANG, ...params }, timeout: 6000,
+});
+
+// Cherche la série. On n'accepte QUE un titre identique (nom ou titre original) : mieux vaut aucune donnée qu'une mauvaise.
+async function load(name, year) {
+  const { data } = await get('/search/tv', { query: name, include_adult: false });
+  const want = norm(name);
+  const exact = (data.results || []).filter((r) => norm(r.name) === want || norm(r.original_name) === want);
+  if (!exact.length) return null;
+  const score = (r) => ((r.origin_country || []).includes('TR') ? 2 : 0)
+    + (year && String(r.first_air_date || '').startsWith(year) ? 1 : 0);
+  exact.sort((a, b) => score(b) - score(a) || (b.popularity || 0) - (a.popularity || 0));
+  const id = exact[0].id;
+
+  const det = (await get(`/tv/${id}`, { append_to_response: 'credits' })).data;
+  if (!det.overview && !/^en/i.test(LANG)) { // pas de résumé dans cette langue : on prend l'anglais
+    try { det.overview = (await get(`/tv/${id}`, { language: 'en-US' })).data.overview || ''; } catch { /* sans importance */ }
+  }
+  console.log(`[tmdb] "${name}" : trouvé (TMDB ${id}, "${det.name}")`);
+  return det;
+}
+
+// Fusionne : TMDB complète/remplace l'affichage, mais id, name et videos restent ceux du site.
+function patch(meta, d) {
+  const out = { ...meta };
+  if (d.poster_path) out.poster = `${IMG}/w500${d.poster_path}`;
+  if (d.backdrop_path) out.background = `${IMG}/w1280${d.backdrop_path}`;
+  if (d.overview) out.description = d.overview;
+  const y1 = String(d.first_air_date || '').slice(0, 4);
+  const y2 = String(d.last_air_date || '').slice(0, 4);
+  if (/^\d{4}$/.test(y1)) {
+    out.releaseInfo = d.in_production ? `${y1}–` : (/^\d{4}$/.test(y2) && y2 !== y1 ? `${y1}–${y2}` : y1);
+  }
+  if (!out.imdbRating && d.vote_count >= 3 && d.vote_average) out.imdbRating = d.vote_average.toFixed(1);
+  const genres = (d.genres || []).map((g) => g.name).filter(Boolean);
+  if (genres.length) out.genres = genres;
+  const cast = ((d.credits && d.credits.cast) || []).slice(0, 12).map((c) => c.name).filter(Boolean);
+  if (cast.length) out.cast = cast;
+  return out;
+}
+
+// Renvoie toujours une fiche valide : la version enrichie, ou celle reçue en cas de problème.
+async function enrich(meta) {
+  if (!KEY || process.env.TMDB_META === '0' || !meta || !meta.name) return meta;
+  try {
+    const name = cleanTitle(meta.name);
+    const year = (String(meta.releaseInfo || '').match(/\d{4}/) || [])[0] || null;
+    const key = `${norm(name)}|${year || ''}`;
+    let hit = cache.get(key);
+    if (!hit || Date.now() - hit.at > (hit.d ? TTL : MISS_TTL)) {
+      hit = { at: Date.now(), d: await load(name, year) };
+      if (!hit.d) console.log(`[tmdb] "${name}" : introuvable avec certitude, fiche du site conservée`);
+      cache.set(key, hit);
+    }
+    return hit.d ? patch(meta, hit.d) : meta;
+  } catch (e) {
+    console.log('[tmdb] ignoré :', e.response ? `HTTP ${e.response.status}` : e.message);
+    return meta;
+  }
+}
+
+module.exports = { enrich, norm };
