@@ -11,7 +11,7 @@ try {
   console.error('youtube-series.json illisible :', e.message);
 }
 
-const KEY = process.env.YOUTUBE_API_KEY || '';
+const KEY = (process.env.YOUTUBE_API_KEY || '').trim().replace(/^["']+|["']+$/g, ''); // tolère espaces et guillemets collés par erreur
 const playlistCache = new Map(); // playlistId -> { at, videos }
 const TTL = 6 * 3600 * 1000;
 
@@ -28,7 +28,8 @@ function entryFor(seriesPath) {
   const key = Object.keys(config).find((k) => !k.startsWith('_') && norm(k) === slug);
   if (!key) return null;
   const v = config[key];
-  return typeof v === 'string' ? { playlist: v, offset: 0 } : { playlist: v.playlist, offset: v.offset || 0 };
+  const clean = (p) => { const t = String(p || '').trim(); const m = t.match(/[?&]list=([\w-]+)/); return m ? m[1] : t; };
+  return typeof v === 'string' ? { playlist: clean(v), offset: 0 } : { playlist: clean(v.playlist), offset: v.offset || 0 };
 }
 
 const EP_RES = [
@@ -49,10 +50,18 @@ async function playlistVideos(playlistId) {
   const videos = [];
   let pageToken;
   for (let page = 0; page < 10; page++) { // 10 pages x 50 = 500 vidéos max
-    const { data } = await axios.get('https://www.googleapis.com/youtube/v3/playlistItems', {
-      params: { part: 'snippet', maxResults: 50, playlistId, key: KEY, pageToken },
-      timeout: 8000,
-    });
+    let data;
+    try {
+      ({ data } = await axios.get('https://www.googleapis.com/youtube/v3/playlistItems', {
+        params: { part: 'snippet', maxResults: 50, playlistId, key: KEY, pageToken },
+        timeout: 8000,
+      }));
+    } catch (e) {
+      // Message précis renvoyé par YouTube (clé invalide, playlist introuvable, quota dépassé...)
+      const err = e.response && e.response.data && e.response.data.error;
+      const reason = err && err.errors && err.errors[0] && err.errors[0].reason;
+      throw new Error(e.response ? `YouTube HTTP ${e.response.status} : ${(err && err.message) || '?'}${reason ? ` (${reason})` : ''}` : e.message);
+    }
     for (const it of data.items || []) {
       const sn = it.snippet || {};
       if (!sn.resourceId || /^(private|deleted) video$/i.test(sn.title || '')) continue;
