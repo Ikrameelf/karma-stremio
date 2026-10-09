@@ -1,35 +1,60 @@
-// Associe un épisode YoTurkish à une vidéo des chaînes YouTube officielles (via une playlist).
-// Stremio lit ensuite la vidéo dans son lecteur YouTube intégré (champ "ytId").
+// Associe un épisode YoTurkish à une vidéo YouTube (lecteur YouTube intégré de Stremio, champ "ytId").
+// 1) Si la série est dans youtube-series.json, cette playlist est utilisée (réglage manuel prioritaire).
+// 2) Sinon, recherche AUTOMATIQUE via l'API YouTube : d'abord la playlist de la série (résultat gardé en mémoire),
+//    puis, à défaut, la vidéo de l'épisode.
+//
+// Variables d'environnement (Render) :
+//   YOUTUBE_API_KEY   obligatoire
+//   YOUTUBE_CHANNELS  optionnel : ID de chaînes autorisées, séparés par des virgules (UC...), pour ne garder que les chaînes officielles
+//   YOUTUBE_AUTO=0    optionnel : désactive la recherche automatique (seul youtube-series.json compte)
 const axios = require('axios');
 
 let config = {};
-let loadError = null;
-try {
-  config = require('./youtube-series.json');
-} catch (e) {
-  loadError = e.message; // JSON mal formé (virgule, guillemet...) ou fichier absent
-  console.error('youtube-series.json illisible :', e.message);
-}
+try { config = require('./youtube-series.json'); } catch { /* fichier absent : pas de réglage manuel */ }
 
-const KEY = (process.env.YOUTUBE_API_KEY || '').trim().replace(/^["']+|["']+$/g, ''); // tolère espaces et guillemets collés par erreur
-const playlistCache = new Map(); // playlistId -> { at, videos }
-const TTL = 6 * 3600 * 1000;
+const KEY = process.env.YOUTUBE_API_KEY || '';
+const CHANNELS = (process.env.YOUTUBE_CHANNELS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const AUTO = process.env.YOUTUBE_AUTO !== '0';
+const TTL = 6 * 3600 * 1000;      // résultat trouvé : gardé 6 h
+const MISS_TTL = 3600 * 1000;     // rien trouvé : on ne réessaie pas avant 1 h (la recherche coûte 100 unités de quota)
+const playlistCache = new Map();  // playlistId -> { at, videos }
+const seriesCache = new Map();    // slug -> { at, playlist }
+const videoCache = new Map();     // slug:épisode -> { at, id }
+let blockedUntil = 0;             // pause de 1 h après une erreur 403 (quota épuisé, clé refusée…)
 
-// "Senden Daha Güzel", "senden-daha-guzel" et /series/senden-daha-guzel/ donnent tous le même identifiant.
-const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-  .replace(/ı/g, 'i').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-const slugOf = (ref) => {
-  const r = String(ref || '');
-  return norm(r.includes('/') ? decodeURIComponent(r.split('?')[0].split('/').filter(Boolean).pop() || '') : r);
+// ---------- Outils ----------
+const norm = (s) => String(s || '')
+  .toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, ' ').trim();
+const slugOf = (p) => decodeURIComponent(String(p).split('?')[0].split('/').filter(Boolean).pop() || '').toLowerCase();
+const nameOf = (p) => norm(slugOf(p).replace(/-/g, ' '));
+// Tous les mots du nom de la série doivent se retrouver dans le titre (accents et ponctuation ignorés).
+const matches = (name, title) => {
+  const words = new Set(norm(title).split(' '));
+  return name.split(' ').every((w) => words.has(w));
 };
+const allowed = (channelId) => !CHANNELS.length || CHANNELS.includes(channelId);
+const NOISE = /\b(trailer|promo|fragman|teaser|preview|clip|scene|moments|highlights)\b/i;
+
+async function api(path, params) {
+  if (Date.now() < blockedUntil) throw new Error('API YouTube en pause (quota ou clé), nouvel essai dans moins d\'1 h');
+  try {
+    const { data } = await axios.get('https://www.googleapis.com/youtube/v3/' + path, { params: { ...params, key: KEY }, timeout: 8000 });
+    return data;
+  } catch (e) {
+    const msg = e.response && e.response.data && e.response.data.error && e.response.data.error.message;
+    if (msg) console.log('  ↳ API YouTube :', msg);
+    if (e.response && e.response.status === 403) blockedUntil = Date.now() + 3600 * 1000;
+    throw e;
+  }
+}
 
 function entryFor(seriesPath) {
   const slug = slugOf(seriesPath);
-  const key = Object.keys(config).find((k) => !k.startsWith('_') && norm(k) === slug);
+  const key = Object.keys(config).find((k) => !k.startsWith('_') && k.toLowerCase() === slug);
   if (!key) return null;
   const v = config[key];
-  const clean = (p) => { const t = String(p || '').trim(); const m = t.match(/[?&]list=([\w-]+)/); return m ? m[1] : t.split(/[&?#\s]/)[0]; }; // garde seulement l'ID : coupe "&si=..." collé depuis un lien de partage
-  return typeof v === 'string' ? { playlist: clean(v), offset: 0 } : { playlist: clean(v.playlist), offset: v.offset || 0 };
+  return typeof v === 'string' ? { playlist: v, offset: 0 } : { playlist: v.playlist, offset: v.offset || 0 };
 }
 
 const EP_RES = [
@@ -37,6 +62,7 @@ const EP_RES = [
   /\b(\d{1,4})\s*\.?\s*(?:bölüm|bolum|episode|épisode)/i,
 ];
 function episodeNumber(title) {
+  if (NOISE.test(String(title))) return null;
   for (const re of EP_RES) {
     const m = String(title).match(re);
     if (m) return parseInt(m[1], 10);
@@ -44,24 +70,14 @@ function episodeNumber(title) {
   return null;
 }
 
+// ---------- Playlists ----------
 async function playlistVideos(playlistId) {
   const hit = playlistCache.get(playlistId);
   if (hit && Date.now() - hit.at < TTL) return hit.videos;
   const videos = [];
   let pageToken;
   for (let page = 0; page < 10; page++) { // 10 pages x 50 = 500 vidéos max
-    let data;
-    try {
-      ({ data } = await axios.get('https://www.googleapis.com/youtube/v3/playlistItems', {
-        params: { part: 'snippet', maxResults: 50, playlistId, key: KEY, pageToken },
-        timeout: 8000,
-      }));
-    } catch (e) {
-      // Message précis renvoyé par YouTube (clé invalide, playlist introuvable, quota dépassé...)
-      const err = e.response && e.response.data && e.response.data.error;
-      const reason = err && err.errors && err.errors[0] && err.errors[0].reason;
-      throw new Error(e.response ? `YouTube HTTP ${e.response.status} : ${(err && err.message) || '?'}${reason ? ` (${reason})` : ''}` : e.message);
-    }
+    const data = await api('playlistItems', { part: 'snippet', maxResults: 50, playlistId, pageToken });
     for (const it of data.items || []) {
       const sn = it.snippet || {};
       if (!sn.resourceId || /^(private|deleted) video$/i.test(sn.title || '')) continue;
@@ -74,53 +90,59 @@ async function playlistVideos(playlistId) {
   return videos;
 }
 
+// ---------- Recherche automatique ----------
+async function searchPlaylist(name) {
+  const data = await api('search', { part: 'snippet', type: 'playlist', q: `${name} episodes`, maxResults: 10 });
+  const found = (data.items || []).filter((it) =>
+    it.id && it.id.playlistId && matches(name, it.snippet.title) && allowed(it.snippet.channelId));
+  for (const it of found.slice(0, 3)) {
+    const videos = await playlistVideos(it.id.playlistId);
+    if (videos.filter((v) => v.ep).length >= 2) return it.id.playlistId; // c'est bien une playlist d'épisodes
+  }
+  return null;
+}
+
+async function searchVideo(name, ep) {
+  const data = await api('search', { part: 'snippet', type: 'video', q: `${name} episode ${ep}`, maxResults: 10, videoDuration: 'long' });
+  const hit = (data.items || []).find((it) =>
+    it.id && it.id.videoId && matches(name, it.snippet.title) && episodeNumber(it.snippet.title) === ep && allowed(it.snippet.channelId));
+  return hit ? hit.id.videoId : null;
+}
+
 // Retourne l'identifiant de la vidéo YouTube de l'épisode, ou null.
 async function findVideo(seriesPath, epNumber) {
-  if (!seriesPath || !epNumber) {
-    console.log('[yt] identifiant d\'épisode sans série ni numéro : recherche YouTube impossible');
-    return null;
-  }
-  const slug = slugOf(seriesPath);
+  if (!KEY || !seriesPath || !epNumber) return null;
+
   const entry = entryFor(seriesPath);
-  if (!entry || !entry.playlist) {
-    console.log(`[yt] "${slug}" absent de youtube-series.json (séries lues : ${Object.keys(config).filter((k) => !k.startsWith('_')).join(', ') || 'aucune'})`);
-    return null;
+  if (entry && entry.playlist) { // réglage manuel
+    const videos = await playlistVideos(entry.playlist);
+    const hit = videos.find((v) => v.ep === epNumber + entry.offset);
+    return hit ? hit.id : null;
   }
-  if (!KEY) {
-    console.log('[yt] YOUTUBE_API_KEY non définie sur Render');
-    return null;
+  if (!AUTO) return null;
+
+  const slug = slugOf(seriesPath);
+  const name = nameOf(seriesPath);
+  if (!name) return null;
+
+  let s = seriesCache.get(slug);
+  if (!s || Date.now() - s.at > (s.playlist ? TTL : MISS_TTL)) {
+    s = { at: Date.now(), playlist: await searchPlaylist(name) };
+    seriesCache.set(slug, s);
   }
-  const videos = await playlistVideos(entry.playlist);
-  const hit = videos.find((v) => v.ep === epNumber + entry.offset);
-  console.log(`[yt] ${slug} épisode ${epNumber} : ${hit ? 'trouvé (' + hit.id + ')' : `introuvable parmi ${videos.length} vidéo(s), ${videos.filter((v) => v.ep).length} avec un numéro`}`);
-  return hit ? hit.id : null;
+  if (s.playlist) {
+    const videos = await playlistVideos(s.playlist);
+    const hit = videos.find((v) => v.ep === epNumber);
+    if (hit) return hit.id;
+  }
+
+  const key = `${slug}:${epNumber}`;
+  let v = videoCache.get(key);
+  if (!v || Date.now() - v.at > (v.id ? TTL : MISS_TTL)) {
+    v = { at: Date.now(), id: await searchVideo(name, epNumber) };
+    videoCache.set(key, v);
+  }
+  return v.id;
 }
 
-// Beaucoup de chaînes interdisent la lecture hors de YouTube : le lecteur de Stremio affiche alors
-// "video-not-playable_in_embedded_player". YouTube indique cette interdiction dans le champ status.embeddable.
-const embedCache = new Map(); // videoId -> { at, ok }
-async function isEmbeddable(videoId) {
-  const hit = embedCache.get(videoId);
-  if (hit && Date.now() - hit.at < TTL) return hit.ok;
-  try {
-    const { data } = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
-      params: { part: 'status', id: videoId, key: KEY }, timeout: 8000,
-    });
-    const st = data.items && data.items[0] && data.items[0].status;
-    const ok = !!st && st.embeddable !== false; // vidéo introuvable = supprimée ou privée
-    console.log(`[yt] ${videoId} : ${ok ? 'lecture intégrée autorisée' : 'lecture intégrée INTERDITE par la chaîne (ou vidéo indisponible)'}`);
-    embedCache.set(videoId, { at: Date.now(), ok });
-    return ok;
-  } catch (e) {
-    console.log('[yt] vérification impossible :', e.response ? `HTTP ${e.response.status}` : e.message);
-    return true; // dans le doute on garde le lien
-  }
-}
-
-const status = () => ({
-  cle_api_definie: !!KEY,
-  erreur_fichier: loadError,
-  series: Object.keys(config).filter((k) => !k.startsWith('_')),
-});
-
-module.exports = { findVideo, isEmbeddable, episodeNumber, status };
+module.exports = { findVideo, episodeNumber };
