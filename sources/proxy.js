@@ -258,6 +258,23 @@ async function handler(req, res) {
         up.request.res.responseUrl
       ) || target;
 
+    // Journal : ce que l'hébergeur répond vraiment (les segments .ts/.m4s ne sont pas listés, il y en a trop).
+    if (!/\.(ts|m4s|aac)(\?|$)/i.test(target)) {
+      console.log(
+        `proxy OK HTTP ${up.status} ${contentType || '?'} ${up.headers['content-length'] || '?'} octets` +
+        `${req.headers.range ? ' (Range ' + req.headers.range + ')' : ''} <- ${target.slice(0, 110)}`
+      );
+    }
+
+    // Un hébergeur qui répond 200 avec une page HTML (lien expiré, protection anti-robot...) met le lecteur en
+    // "playback error" sans explication : on le refuse et on affiche le début de la page dans les logs.
+    if (/text\/html/i.test(contentType) && !/\.m3u8(\?|$)/i.test(finalUrl)) {
+      const page = await toText(up.data);
+      console.log(`proxy REFUSÉ : l'hébergeur renvoie une page web au lieu d'une vidéo : ${page.replace(/\s+/g, ' ').slice(0, 400)}`);
+      if (!res.headersSent) res.status(502).end();
+      return;
+    }
+
     // -------------------------------------------------------------------------
     // CORS
     // -------------------------------------------------------------------------
