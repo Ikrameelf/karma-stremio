@@ -7,7 +7,7 @@ const { playable } = require('./proxy');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || process.env.TMDB_KEY || '';
 const DIR = path.join(__dirname, '..', 'providers');
-const EXCLUDE = ['movix']; // ton Movix (sources/movix.js) est déjà branché
+const EXCLUDE = ['movix', 'anime-sama', 'anime-ultime', 'dulourd', 'flemmix', 'papadustream'];
 const TIMEOUT_MS = 12000;  // un provider plus lent est ignoré
 
 // Tous les .js de providers/ sont utilisés : ajouter un fichier l'active, le retirer le désactive.
