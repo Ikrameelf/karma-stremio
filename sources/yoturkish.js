@@ -203,7 +203,11 @@ async function stream(id) {
   if (epInfo) {
     try {
       const ytId = await youtube.findVideo(epInfo.name, epInfo.episode);
-      if (ytId) streams.push({ name: 'YoTurkish', title: 'YouTube (chaîne officielle)', ytId });
+      if (ytId && (await youtube.isEmbeddable(ytId))) {
+        streams.push({ name: 'YoTurkish', title: 'YouTube (chaîne officielle)', ytId });
+      } else if (ytId) { // lecture intégrée interdite : seule l'appli YouTube peut la lire
+        streams.push({ name: 'YoTurkish', title: 'YouTube (bloqué dans Stremio : ouvrir dans YouTube)', externalUrl: `https://www.youtube.com/watch?v=${ytId}` });
+      }
     } catch (e) {
       console.log('[yt] erreur :', e.response ? `HTTP ${e.response.status}` : e.message);
     }
