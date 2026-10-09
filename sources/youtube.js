@@ -28,7 +28,7 @@ function entryFor(seriesPath) {
   const key = Object.keys(config).find((k) => !k.startsWith('_') && norm(k) === slug);
   if (!key) return null;
   const v = config[key];
-  const clean = (p) => { const t = String(p || '').trim(); const m = t.match(/[?&]list=([\w-]+)/); return m ? m[1] : t; };
+  const clean = (p) => { const t = String(p || '').trim(); const m = t.match(/[?&]list=([\w-]+)/); return m ? m[1] : t.split(/[&?#\s]/)[0]; }; // garde seulement l'ID : coupe "&si=..." collé depuis un lien de partage
   return typeof v === 'string' ? { playlist: clean(v), offset: 0 } : { playlist: clean(v.playlist), offset: v.offset || 0 };
 }
 
