@@ -7,10 +7,33 @@ const { playable } = require('./proxy');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || process.env.TMDB_KEY || '';
 const DIR = path.join(__dirname, '..', 'providers');
+// Providers présents dans providers/ mais ignorés pour l'instant (retire un nom pour le réactiver).
 const EXCLUDE = ['movix', 'anime-sama', 'anime-ultime', 'dulourd', 'flemmix', 'papadustream'];
-const TIMEOUT_MS = 12000;  // un provider plus lent est ignoré
+const TIMEOUT_MS = 12000; // un provider plus lent est ignoré
 
-// Tous les .js de providers/ sont utilisés : ajouter un fichier l'active, le retirer le désactive.
+// DIAGNOSTIC (à retirer une fois le problème réglé) : journalise chaque requête
+// faite par les providers (statut, durée, serveur), pour voir où ils s'arrêtent.
+if (!globalThis.__nuvioFetchPatched) {
+  globalThis.__nuvioFetchPatched = true;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    const t0 = Date.now();
+    try {
+      const res = await realFetch(input, init);
+      const server = res.headers.get('server') || '';
+      const cf = res.headers.get('cf-mitigated') ? ' cf-mitigated' : '';
+      console.log(`[nuvio-fetch] ${res.status} ${Date.now() - t0}ms ${server}${cf} ${url.slice(0, 140)}`);
+      return res;
+    } catch (e) {
+      const code = e.code || (e.cause && e.cause.code) || e.message;
+      console.log(`[nuvio-fetch] ECHEC ${code} ${Date.now() - t0}ms ${url.slice(0, 140)}`);
+      throw e;
+    }
+  };
+}
+
+// Tous les .js de providers/ sont utilisés, sauf ceux de EXCLUDE.
 function listProviders() {
   try {
     return fs.readdirSync(DIR)
