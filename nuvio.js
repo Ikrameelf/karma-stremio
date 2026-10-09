@@ -2,12 +2,22 @@
 // Prérequis : Node 18+ (fetch global) et une clé TMDB gratuite dans la variable d'env TMDB_KEY
 const path = require('path');
 
-const TMDB_KEY = process.env.TMDB_KEY;
+const TMDB_KEY = (process.env.TMDB_KEY || '').trim();
 
 async function imdbToTmdb(imdbId, type) {
+  if (!TMDB_KEY) {
+    console.log('[nuvio] TMDB_KEY absente ou vide');
+    return null;
+  }
   const url = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`;
-  const j = await (await fetch(url)).json();
+  const res = await fetch(url);
+  const j = await res.json();
+  if (!res.ok) {
+    console.log(`[nuvio] TMDB a refusé la requête : ${res.status} ${j.status_message || ''}`);
+    return null;
+  }
   const hit = type === 'movie' ? j.movie_results?.[0] : j.tv_results?.[0];
+  console.log(`[nuvio] ${imdbId} -> TMDB ${hit ? hit.id : 'introuvable'}`);
   return hit ? hit.id : null;
 }
 
@@ -34,13 +44,3 @@ async function getStreams(providerName, stremioType, stremioId) {
 }
 
 module.exports = { getStreams };
-
-// Exemple d'utilisation dans ton index.js :
-//
-// const { getStreams } = require('./nuvio');
-// builder.defineStreamHandler(async ({ type, id }) => {
-//   const lists = await Promise.all(
-//     ['coflix', 'frenchstream'].map((p) => getStreams(p, type, id).catch(() => []))
-//   );
-//   return { streams: lists.flat() };
-// });
