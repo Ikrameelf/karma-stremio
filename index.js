@@ -80,6 +80,7 @@ app.get('/debug', async (req, res) => {
     cles: { TMDB_API_KEY: !!process.env.TMDB_API_KEY, YOUTUBE_API_KEY: !!process.env.YOUTUBE_API_KEY },
     yoturkish_catalogue: await probe('https://yoturkish.to/series/'),
     movix_address: await probe('https://movix.online/address.json'),
+    coflix: await probe('https://coflix.wiki/'),
   });
 });
 
