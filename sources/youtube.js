@@ -96,10 +96,31 @@ async function findVideo(seriesPath, epNumber) {
   return hit ? hit.id : null;
 }
 
+// Beaucoup de chaînes interdisent la lecture hors de YouTube : le lecteur de Stremio affiche alors
+// "video-not-playable_in_embedded_player". YouTube indique cette interdiction dans le champ status.embeddable.
+const embedCache = new Map(); // videoId -> { at, ok }
+async function isEmbeddable(videoId) {
+  const hit = embedCache.get(videoId);
+  if (hit && Date.now() - hit.at < TTL) return hit.ok;
+  try {
+    const { data } = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
+      params: { part: 'status', id: videoId, key: KEY }, timeout: 8000,
+    });
+    const st = data.items && data.items[0] && data.items[0].status;
+    const ok = !!st && st.embeddable !== false; // vidéo introuvable = supprimée ou privée
+    console.log(`[yt] ${videoId} : ${ok ? 'lecture intégrée autorisée' : 'lecture intégrée INTERDITE par la chaîne (ou vidéo indisponible)'}`);
+    embedCache.set(videoId, { at: Date.now(), ok });
+    return ok;
+  } catch (e) {
+    console.log('[yt] vérification impossible :', e.response ? `HTTP ${e.response.status}` : e.message);
+    return true; // dans le doute on garde le lien
+  }
+}
+
 const status = () => ({
   cle_api_definie: !!KEY,
   erreur_fichier: loadError,
   series: Object.keys(config).filter((k) => !k.startsWith('_')),
 });
 
-module.exports = { findVideo, episodeNumber, status };
+module.exports = { findVideo, isEmbeddable, episodeNumber, status };
