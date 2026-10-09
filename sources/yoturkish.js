@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
+const tmdb = require('./tmdb');
 const youtube = require('./youtube');
 
 const BASE = 'https://yoturkish.to';
@@ -85,12 +86,12 @@ async function meta(id) {
     };
   });
 
-  return {
+  return tmdb.enrich({ // complète la fiche avec TMDB ; renvoie la fiche du site telle quelle en cas de problème
     id, type: 'series', name, poster, background: poster,
     description: $('div.desc.shorting p').first().text().trim() || undefined,
     releaseInfo: $('span a[href*="year/"]').first().text().trim() || undefined,
     imdbRating: rating, genres, cast, videos,
-  };
+  });
 }
 
 // ---------- Streams ----------
