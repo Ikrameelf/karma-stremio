@@ -7,9 +7,6 @@ const { playable } = require('./proxy');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || process.env.TMDB_KEY || '';
 const DIR = path.join(__dirname, '..', 'providers');
-// Providers présents dans providers/ mais ignorés pour l'instant (retire un nom pour le réactiver).
-const EXCLUDE = ['movix', 'anime-sama', 'anime-ultime', 'dulourd', 'flemmix', 'papadustream'];
-const TIMEOUT_MS = 12000; // un provider plus lent est ignoré
 
 // DIAGNOSTIC (à retirer une fois le problème réglé) : journalise chaque requête
 // faite par les providers (statut, durée, serveur), pour voir où ils s'arrêtent.
