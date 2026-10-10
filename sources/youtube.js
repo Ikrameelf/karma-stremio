@@ -1,12 +1,13 @@
-// Associe un épisode YoTurkish à une vidéo YouTube (lecteur YouTube intégré de Stremio, champ "ytId").
+// Associe un épisode YoTurkish à des vidéos YouTube (lecteur YouTube intégré de Stremio, champ "ytId").
 // 1) Si la série est dans youtube-series.json, cette playlist est utilisée (réglage manuel prioritaire).
 // 2) Sinon, recherche AUTOMATIQUE via l'API YouTube : d'abord la playlist de la série (résultat gardé en mémoire),
-//    puis, à défaut, la vidéo de l'épisode.
+//    puis, à défaut, la vidéo de l'épisode. findVideos ajoute d'autres vidéos, chaînes officielles en premier.
 //
 // Variables d'environnement (Render) :
-//   YOUTUBE_API_KEY   obligatoire
-//   YOUTUBE_CHANNELS  optionnel : ID de chaînes autorisées, séparés par des virgules (UC...), pour ne garder que les chaînes officielles
-//   YOUTUBE_AUTO=0    optionnel : désactive la recherche automatique (seul youtube-series.json compte)
+//   YOUTUBE_API_KEY         obligatoire
+//   YOUTUBE_CHANNELS        optionnel : ID de chaînes autorisées, séparés par des virgules (UC...). Sert aussi de filtre.
+//   YOUTUBE_OFFICIAL_NAMES  optionnel : noms de chaînes à considérer comme officielles, séparés par des virgules
+//   YOUTUBE_AUTO=0          optionnel : désactive la recherche automatique (seul youtube-series.json compte)
 const axios = require('axios');
 
 let config = {};
@@ -144,7 +145,9 @@ async function findVideo(seriesPath, epNumber) {
   }
   return v.id;
 }
-const extraCache = new Map(); // slug:épisode -> { at, ids }
+
+// ---------- Vidéos supplémentaires, officielles en premier ----------
+const extraCache = new Map(); // slug:épisode -> { at, list }
 
 // Chaînes officielles reconnues par leur nom (en plus de YOUTUBE_CHANNELS, qui reste le plus fiable).
 const OFFICIAL_RE = new RegExp(
@@ -156,7 +159,7 @@ const REUPLOAD_RE = /\b(özet|ozet|reaction|shorts?|dublaj|altyaz[ıi]|english s
 function score(it) {
   const sn = it.snippet || {};
   let s = 0;
-  if (CHANNELS.includes(sn.channelId)) s += 10;      // chaîne listée dans YOUTUBE_CHANNELS
+  if (CHANNELS.includes(sn.channelId)) s += 10;        // chaîne listée dans YOUTUBE_CHANNELS
   if (OFFICIAL_RE.test(sn.channelTitle || '')) s += 5; // nom de chaîne officielle
   if (BOLUM_RE.test(sn.title || '')) s += 2;           // titre "N. Bölüm"
   if (REUPLOAD_RE.test(sn.title || '')) s -= 3;        // résumés, doublages, re-uploads
@@ -177,6 +180,7 @@ async function searchVideos(name, ep) {
     .sort((a, b) => b.score - a.score);
 }
 
+// Retourne jusqu'à `max` identifiants, chaînes officielles d'abord.
 async function findVideos(seriesPath, epNumber, max = 4) {
   if (!KEY || !seriesPath || !epNumber) return [];
   const manual = entryFor(seriesPath);
@@ -205,3 +209,4 @@ async function findVideos(seriesPath, epNumber, max = 4) {
   return [...new Set([...official, first, ...others].filter(Boolean))].slice(0, max);
 }
 
+module.exports = { findVideo, findVideos, episodeNumber };
