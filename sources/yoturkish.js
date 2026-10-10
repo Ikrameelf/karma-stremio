@@ -206,7 +206,12 @@ async function stream(id) {
   const browserLinks = streams.filter((x) => x.externalUrl);
   // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
   const showBrowser = process.env.SHOW_BROWSER_LINKS;
-  return [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
+    const final = [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
+  const subtitles = await subs.find(seriesPath, epNum);
+  if (subtitles.length) final.forEach((s) => { s.subtitles = subtitles; });
+  console.log(`YoTurkish sous-titres : ${subtitles.length}`);
+  return final;
+
 }
 
 module.exports = {
