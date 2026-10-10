@@ -150,7 +150,7 @@ async function collectWithBrowser(url) {
   }
 }
 
-async function streamUncached(id) {
+async function stream(id) {
   const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
   const epUrl = BASE + dec(parts[2]);
   const seriesPath = parts[3] ? dec(parts[3]) : null;
@@ -184,7 +184,6 @@ async function streamUncached(id) {
         ytId,
       }));
   } catch (e) {
-
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
   }
   const seen = new Set();
@@ -205,20 +204,7 @@ async function streamUncached(id) {
   const browserLinks = streams.filter((x) => x.externalUrl);
   // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
   const showBrowser = process.env.SHOW_BROWSER_LINKS;
-      const final = [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
-  const subtitles = await subs.find(seriesPath, epNum);
-  if (subtitles.length) final.forEach((s) => { s.subtitles = subtitles; });
-  console.log(`YoTurkish sous-titres : ${subtitles.length}`);
-  return final;
-
-}
-const streamCache = new Map();
-async function stream(id) {
-  const hit = streamCache.get(id);
-  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.list;
-  const list = await streamUncached(id);
-  if (list.some((s) => s.url)) streamCache.set(id, { at: Date.now(), list }); // on ne garde que les succès
-  return list;
+  return [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
 }
 
 module.exports = {
