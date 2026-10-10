@@ -202,7 +202,7 @@ async function findVideos(seriesPath, epNumber, max = 4) {
   }
   const official = found.filter((v) => v.score >= 5).map((v) => v.id);
   const others = found.filter((v) => v.score < 5).map((v) => v.id);
-  return [...new Set([...official, first, ...others].filter(Boolean))].slice(0, max);
+    return [...new Set([...official, first, ...others].filter(Boolean))].slice(0, max);
 }
 
-
+module.exports = { findVideo, findVideos, episodeNumber };
