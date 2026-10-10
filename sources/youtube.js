@@ -146,40 +146,63 @@ async function findVideo(seriesPath, epNumber) {
 }
 const extraCache = new Map(); // slug:épisode -> { at, ids }
 
-// Toutes les vidéos qui correspondent à la série et à l'épisode (autres chaînes comprises).
+// Chaînes officielles reconnues par leur nom (en plus de YOUTUBE_CHANNELS, qui reste le plus fiable).
+const OFFICIAL_RE = new RegExp(
+  '\\b(official|resmi|show tv|star tv|kanal d|atv|trt|fox|now|tv8|kanal 7|' +
+  (process.env.YOUTUBE_OFFICIAL_NAMES || 'zzzz').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).join('|') + ')\\b', 'i');
+const BOLUM_RE = /\b(bölüm|bolum)\b/i;
+const REUPLOAD_RE = /\b(özet|ozet|reaction|shorts?|dublaj|altyaz[ıi]|english subtitles?|spanish|arabic|multi ?sub)\b/i;
+
+function score(it) {
+  const sn = it.snippet || {};
+  let s = 0;
+  if (CHANNELS.includes(sn.channelId)) s += 10;      // chaîne listée dans YOUTUBE_CHANNELS
+  if (OFFICIAL_RE.test(sn.channelTitle || '')) s += 5; // nom de chaîne officielle
+  if (BOLUM_RE.test(sn.title || '')) s += 2;           // titre "N. Bölüm"
+  if (REUPLOAD_RE.test(sn.title || '')) s -= 3;        // résumés, doublages, re-uploads
+  return s;
+}
+
+// Vidéos de l'épisode, classées : chaînes officielles et "bölüm" en premier.
 async function searchVideos(name, ep) {
-  const data = await api('search', { part: 'snippet', type: 'video', q: `${name} episode ${ep}`, maxResults: 25, videoDuration: 'long' });
+  const data = await api('search', {
+    part: 'snippet', type: 'video', q: `${name} ${ep}. bölüm`, maxResults: 25,
+    videoDuration: 'long', regionCode: 'TR', relevanceLanguage: 'tr',
+  });
   return (data.items || [])
     .filter((it) =>
       it.id && it.id.videoId && matches(name, it.snippet.title) &&
       episodeNumber(it.snippet.title) === ep && allowed(it.snippet.channelId))
-    .map((it) => it.id.videoId);
+    .map((it) => ({ id: it.id.videoId, score: score(it) }))
+    .sort((a, b) => b.score - a.score);
 }
 
-// Retourne jusqu'à `max` identifiants : d'abord la vidéo habituelle, puis d'autres vidéos du même épisode.
 async function findVideos(seriesPath, epNumber, max = 4) {
   if (!KEY || !seriesPath || !epNumber) return [];
-  const ids = [];
+  const manual = entryFor(seriesPath);
   const first = await findVideo(seriesPath, epNumber);
-  if (first) ids.push(first);
-  if (!AUTO) return ids;
+  if (manual && manual.playlist) return first ? [first] : []; // réglage manuel : on ne touche pas
+  if (!AUTO) return first ? [first] : [];
 
   const slug = slugOf(seriesPath);
   const name = nameOf(seriesPath);
-  if (!name) return ids;
-
-  const key = `${slug}:${epNumber}`;
-  let hit = extraCache.get(key);
-  if (!hit || Date.now() - hit.at > (hit.ids.length ? TTL : MISS_TTL)) {
-    try {
-      hit = { at: Date.now(), ids: await searchVideos(name, epNumber) };
-      extraCache.set(key, hit);
-    } catch (e) {
-      return ids; // quota épuisé ou erreur : on garde au moins la première vidéo
+  let found = [];
+  if (name) {
+    const key = `${slug}:${epNumber}`;
+    let hit = extraCache.get(key);
+    if (!hit || Date.now() - hit.at > (hit.list.length ? TTL : MISS_TTL)) {
+      try {
+        hit = { at: Date.now(), list: await searchVideos(name, epNumber) };
+        extraCache.set(key, hit);
+      } catch (e) {
+        hit = { list: [] }; // quota épuisé ou erreur : on garde au moins la première vidéo
+      }
     }
+    found = hit.list;
   }
-  for (const id of hit.ids) if (!ids.includes(id)) ids.push(id);
-  return ids.slice(0, max);
+  const official = found.filter((v) => v.score >= 5).map((v) => v.id);
+  const others = found.filter((v) => v.score < 5).map((v) => v.id);
+  return [...new Set([...official, first, ...others].filter(Boolean))].slice(0, max);
 }
-module.exports = { findVideo, findVideos, episodeNumber };
+
 
