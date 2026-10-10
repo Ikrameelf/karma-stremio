@@ -151,7 +151,7 @@ async function collectWithBrowser(url) {
   }
 }
 
-async function stream(id) {
+async function streamUncached(id) {
   const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
   const epUrl = BASE + dec(parts[2]);
   const seriesPath = parts[3] ? dec(parts[3]) : null;
@@ -212,6 +212,14 @@ async function stream(id) {
   console.log(`YoTurkish sous-titres : ${subtitles.length}`);
   return final;
 
+}
+const streamCache = new Map();
+async function stream(id) {
+  const hit = streamCache.get(id);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.list;
+  const list = await streamUncached(id);
+  if (list.some((s) => s.url)) streamCache.set(id, { at: Date.now(), list }); // on ne garde que les succès
+  return list;
 }
 
 module.exports = {
