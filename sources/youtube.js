@@ -1,12 +1,13 @@
-// Associe un épisode YoTurkish à une vidéo YouTube (lecteur YouTube intégré de Stremio, champ "ytId").
+// Associe un épisode YoTurkish à des vidéos YouTube (lecteur YouTube intégré de Stremio, champ "ytId").
 // 1) Si la série est dans youtube-series.json, cette playlist est utilisée (réglage manuel prioritaire).
 // 2) Sinon, recherche AUTOMATIQUE via l'API YouTube : d'abord la playlist de la série (résultat gardé en mémoire),
-//    puis, à défaut, la vidéo de l'épisode.
+//    puis, à défaut, la vidéo de l'épisode. findVideos ajoute d'autres vidéos, chaînes officielles en premier.
 //
 // Variables d'environnement (Render) :
-//   YOUTUBE_API_KEY   obligatoire
-//   YOUTUBE_CHANNELS  optionnel : ID de chaînes autorisées, séparés par des virgules (UC...), pour ne garder que les chaînes officielles
-//   YOUTUBE_AUTO=0    optionnel : désactive la recherche automatique (seul youtube-series.json compte)
+//   YOUTUBE_API_KEY         obligatoire
+//   YOUTUBE_CHANNELS        optionnel : ID de chaînes autorisées, séparés par des virgules (UC...). Sert aussi de filtre.
+//   YOUTUBE_OFFICIAL_NAMES  optionnel : noms de chaînes à considérer comme officielles, séparés par des virgules
+//   YOUTUBE_AUTO=0          optionnel : désactive la recherche automatique (seul youtube-series.json compte)
 const axios = require('axios');
 
 let config = {};
@@ -144,7 +145,26 @@ async function findVideo(seriesPath, epNumber) {
   }
   return v.id;
 }
-const extraCache = new Map(); // slug:épisode -> { at, ids }
+
+// ---------- Vidéos supplémentaires, officielles en premier ----------
+const embedCache = new Map(); // id -> intégrable ou non (1 unité de quota par vérification)
+
+// Écarte les vidéos dont l'auteur interdit la lecture dans un lecteur intégré ("not playable in embedded player").
+async function onlyEmbeddable(ids) {
+  const todo = ids.filter((id) => !embedCache.has(id));
+  if (todo.length) {
+    try {
+      const data = await api('videos', { part: 'status', id: todo.join(',') });
+      const ok = new Set((data.items || []).filter((v) => v.status && v.status.embeddable).map((v) => v.id));
+      todo.forEach((id) => embedCache.set(id, ok.has(id)));
+    } catch (e) {
+      return ids; // en cas d'erreur API, on ne filtre pas
+    }
+  }
+  return ids.filter((id) => embedCache.get(id) !== false);
+}
+
+const extraCache = new Map(); // slug:épisode -> { at, list }
 
 // Chaînes officielles reconnues par leur nom (en plus de YOUTUBE_CHANNELS, qui reste le plus fiable).
 const OFFICIAL_RE = new RegExp(
@@ -156,7 +176,7 @@ const REUPLOAD_RE = /\b(özet|ozet|reaction|shorts?|dublaj|altyaz[ıi]|english s
 function score(it) {
   const sn = it.snippet || {};
   let s = 0;
-  if (CHANNELS.includes(sn.channelId)) s += 10;      // chaîne listée dans YOUTUBE_CHANNELS
+  if (CHANNELS.includes(sn.channelId)) s += 10;        // chaîne listée dans YOUTUBE_CHANNELS
   if (OFFICIAL_RE.test(sn.channelTitle || '')) s += 5; // nom de chaîne officielle
   if (BOLUM_RE.test(sn.title || '')) s += 2;           // titre "N. Bölüm"
   if (REUPLOAD_RE.test(sn.title || '')) s -= 3;        // résumés, doublages, re-uploads
@@ -167,7 +187,7 @@ function score(it) {
 async function searchVideos(name, ep) {
   const data = await api('search', {
     part: 'snippet', type: 'video', q: `${name} ${ep}. bölüm`, maxResults: 25,
-    videoDuration: 'long', regionCode: 'TR', relevanceLanguage: 'tr',
+    videoDuration: 'long', videoEmbeddable: 'true', regionCode: 'TR', relevanceLanguage: 'tr',
   });
   return (data.items || [])
     .filter((it) =>
@@ -177,12 +197,15 @@ async function searchVideos(name, ep) {
     .sort((a, b) => b.score - a.score);
 }
 
+// Retourne jusqu'à `max` identifiants de vidéos intégrables, chaînes officielles d'abord.
 async function findVideos(seriesPath, epNumber, max = 4) {
   if (!KEY || !seriesPath || !epNumber) return [];
   const manual = entryFor(seriesPath);
-  const first = await findVideo(seriesPath, epNumber);
-  if (manual && manual.playlist) return first ? [first] : []; // réglage manuel : on ne touche pas
-  if (!AUTO) return first ? [first] : [];
+  let first = null;
+  try { first = await findVideo(seriesPath, epNumber); } catch (e) { /* on garde la recherche */ }
+  if ((manual && manual.playlist) || !AUTO) { // réglage manuel : on ne touche pas
+    return first ? onlyEmbeddable([first]) : [];
+  }
 
   const slug = slugOf(seriesPath);
   const name = nameOf(seriesPath);
@@ -202,7 +225,8 @@ async function findVideos(seriesPath, epNumber, max = 4) {
   }
   const official = found.filter((v) => v.score >= 5).map((v) => v.id);
   const others = found.filter((v) => v.score < 5).map((v) => v.id);
-    return [...new Set([...official, first, ...others].filter(Boolean))].slice(0, max);
+  const all = [...new Set([...official, first, ...others].filter(Boolean))];
+  return (await onlyEmbeddable(all)).slice(0, max);
 }
 
 module.exports = { findVideo, findVideos, episodeNumber };
