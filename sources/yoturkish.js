@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
 const tmdb = require('./tmdb');
+const subs = require('./subs');
 const youtube = require('./youtube');
 
 const BASE = 'https://yoturkish.to';
