@@ -144,5 +144,42 @@ async function findVideo(seriesPath, epNumber) {
   }
   return v.id;
 }
+const extraCache = new Map(); // slug:épisode -> { at, ids }
 
-module.exports = { findVideo, episodeNumber };
+// Toutes les vidéos qui correspondent à la série et à l'épisode (autres chaînes comprises).
+async function searchVideos(name, ep) {
+  const data = await api('search', { part: 'snippet', type: 'video', q: `${name} episode ${ep}`, maxResults: 25, videoDuration: 'long' });
+  return (data.items || [])
+    .filter((it) =>
+      it.id && it.id.videoId && matches(name, it.snippet.title) &&
+      episodeNumber(it.snippet.title) === ep && allowed(it.snippet.channelId))
+    .map((it) => it.id.videoId);
+}
+
+// Retourne jusqu'à `max` identifiants : d'abord la vidéo habituelle, puis d'autres vidéos du même épisode.
+async function findVideos(seriesPath, epNumber, max = 4) {
+  if (!KEY || !seriesPath || !epNumber) return [];
+  const ids = [];
+  const first = await findVideo(seriesPath, epNumber);
+  if (first) ids.push(first);
+  if (!AUTO) return ids;
+
+  const slug = slugOf(seriesPath);
+  const name = nameOf(seriesPath);
+  if (!name) return ids;
+
+  const key = `${slug}:${epNumber}`;
+  let hit = extraCache.get(key);
+  if (!hit || Date.now() - hit.at > (hit.ids.length ? TTL : MISS_TTL)) {
+    try {
+      hit = { at: Date.now(), ids: await searchVideos(name, epNumber) };
+      extraCache.set(key, hit);
+    } catch (e) {
+      return ids; // quota épuisé ou erreur : on garde au moins la première vidéo
+    }
+  }
+  for (const id of hit.ids) if (!ids.includes(id)) ids.push(id);
+  return ids.slice(0, max);
+}
+module.exports = { findVideo, findVideos, episodeNumber };
+
