@@ -174,9 +174,17 @@ async function stream(id) {
 
   const streams = [];
   try {
-    const ytId = await youtube.findVideo(seriesPath, epNum);
-    if (ytId) streams.push({ name: 'YoTurkish', title: 'YouTube (chaîne officielle)', ytId });
+    const ids = youtube.findVideos
+      ? await youtube.findVideos(seriesPath, epNum, 4)
+      : [await youtube.findVideo(seriesPath, epNum)];
+    [...new Set(ids.filter(Boolean))].forEach((ytId, i) =>
+      streams.push({
+        name: 'YoTurkish',
+        title: i === 0 ? 'YouTube (chaîne officielle)' : `YouTube (autre vidéo ${i})`,
+        ytId,
+      }));
   } catch (e) {
+
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
   }
   const seen = new Set();
