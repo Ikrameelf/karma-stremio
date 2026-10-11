@@ -155,6 +155,57 @@ async function xfsDownload(html, pageUrl) {
   }
   return [];
 }
+// Voe : le lien est caché dans un JSON obfusqué (<script type="application/json">["..."]</script>).
+const rot13 = (s) =>
+  s.replace(/[a-z]/gi, (c) => {
+    const b = c <= 'Z' ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - b + 13) % 26) + b);
+  });
+
+function voeDecode(payload, luts) {
+  let s = rot13(payload);
+  for (const p of luts) s = s.split(p).join('');
+  s = Buffer.from(s, 'base64').toString('utf8');
+  s = Array.from(s, (c) => String.fromCharCode(c.charCodeAt(0) - 3)).join('');
+  s = Buffer.from(s.split('').reverse().join(''), 'base64').toString('utf8');
+  return JSON.parse(s);
+}
+
+async function tryVoe(html, pageUrl, referer, depth = 1) {
+  const h = String(html);
+  const script = h.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (script) {
+    try {
+      let payload = JSON.parse(script[1].trim());
+      if (Array.isArray(payload)) payload = payload[0];
+      const lutBlock = h.match(/(\[(?:'\W{2}'[,\]]){1,9})/);
+      const luts = lutBlock ? [...lutBlock[1].matchAll(/'(\W{2})'/g)].map((m) => m[1]) : ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
+      const data = voeDecode(String(payload), luts);
+      const origin = new URL(pageUrl).origin;
+      const out = [];
+      if (data.source) out.push({ url: data.source, kind: /\.m3u8/i.test(data.source) ? 'HLS' : 'MP4' });
+      if (data.direct_access_url) out.push({ url: data.direct_access_url, kind: 'MP4' });
+      console.log(`  ↳ VOE ${origin} : ${out.length} lien(s) décodé(s)`);
+      return out.map((o) => ({ ...o, headers: { Referer: origin + '/', 'User-Agent': UA } }));
+    } catch (e) {
+      console.log(`  ↳ VOE décodage échoué : ${e.message}`);
+    }
+  }
+  const redirect = h.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+  if (redirect && depth > 0) {
+    try {
+      const next = new URL(redirect[1], pageUrl).href;
+      const { data } = await axios.get(next, {
+        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        headers: { 'User-Agent': UA, Referer: referer || pageUrl },
+      });
+      return tryVoe(typeof data === 'string' ? data : JSON.stringify(data), next, referer, depth - 1);
+    } catch (e) {
+      console.log(`  ↳ VOE redirection échouée : ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+    }
+  }
+  return [];
+}
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
 async function resolveEmbed(url, referer) {
@@ -174,8 +225,10 @@ async function resolveEmbed(url, referer) {
       const viaMd5 = await passMd5(html, url);
       if (viaMd5.length) return viaMd5;
     }
-    if (!found.length) {
-      const viaXfs = await tryXfs(url, html, referer);
+        if (!found.length) {
+      const viaVoe = await tryVoe(html, url, referer);
+      if (viaVoe.length) return viaVoe;
+    }
       if (viaXfs.length) return viaXfs;
     }
     if (!found.length) {
