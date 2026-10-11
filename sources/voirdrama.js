@@ -14,8 +14,12 @@ const PUBLIC = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '')
 
 // Le site bloque l'affichage de ses images ailleurs (HTTP 403 sans Referer) :
 // les affiches passent par la route /voirdrama-img de l'addon, qui envoie le bon Referer.
-const proxiedImg = (u) =>
-  u && PUBLIC ? `${PUBLIC}/voirdrama-img/${Buffer.from(u).toString('base64url')}.jpg` : u;
+const imgCache = new Map(); // images déjà récupérées (évite de redemander au site)
+const proxiedImg = (u, fallback) => {
+  if (!u || !PUBLIC) return u;
+  const payload = fallback && fallback !== u ? `${u}|${fallback}` : u; // grande image | miniature
+  return `${PUBLIC}/voirdrama-img/${Buffer.from(payload).toString('base64url')}.jpg`;
+};
 
 // ---------- utilitaires ----------
 
@@ -63,7 +67,7 @@ function imgUrl(tag) {
   for (const c of cands) {
     if (!c || /^data:/i.test(c)) continue;
     try {
-      return bigPoster(new URL(decode(c), BASE).href);
+      return new URL(decode(c), BASE).href;
     } catch (_) {}
   }
   return undefined;
@@ -80,8 +84,10 @@ function parseList(html) {
     const before = html.slice(Math.max(0, m.index - 2500), m.index);
     const tags = [...before.matchAll(/<img\b[^>]*>/gi)].map((t) => t[0]);
     let poster;
-    for (let i = tags.length - 1; i >= 0 && !poster; i--) poster = imgUrl(tags[i]); // la plus proche du titre
-    out.set(slug, { slug, name: decode(m[2]), poster });
+    let thumb;
+    for (let i = tags.length - 1; i >= 0 && !thumb; i--) thumb = imgUrl(tags[i]); // la plus proche du titre
+    poster = bigPoster(thumb);
+    out.set(slug, { slug, name: decode(m[2]), poster, thumb });
   }
   return [...out.values()];
 }
@@ -116,7 +122,7 @@ async function catalog(extra = {}) {
     id: `voirdrama:${i.slug}`,
     type: 'series',
     name: i.name,
-    poster: proxiedImg(i.poster),
+    poster: proxiedImg(i.poster, i.thumb),
   }));
 }
 
@@ -285,23 +291,43 @@ function registerDebug(app) {
     }
   });
 
-  // Affiches : /voirdrama-img/<url en base64url>.jpg (uniquement les images de voirdrama.to)
+  // Affiches : /voirdrama-img/<url[|repli] en base64url>.jpg (uniquement les images de voirdrama.to)
   app.get('/voirdrama-img/:id', async (req, res) => {
     try {
-      const u = new URL(Buffer.from(req.params.id.replace(/\.\w+$/, ''), 'base64url').toString());
-      if (u.hostname !== 'voirdrama.to' || !u.pathname.startsWith('/wp-content/'))
-        return res.status(400).end();
-      const r = await fetch(u.href, {
-        headers: { 'User-Agent': UA, Referer: BASE + '/', Accept: 'image/*,*/*;q=0.8' },
-      });
-      if (!r.ok) {
-        console.error('[voirdrama] image', r.status, u.href);
-        return res.status(502).end();
+      const id = req.params.id.replace(/\.\w+$/, '');
+      const send = (img) => {
+        res.set('Content-Type', img.type);
+        res.set('Cache-Control', 'public, max-age=86400');
+        res.set('Access-Control-Allow-Origin', '*');
+        res.send(img.buf);
+      };
+      if (imgCache.has(id)) return send(imgCache.get(id));
+
+      const urls = Buffer.from(id, 'base64url').toString().split('|');
+      for (const raw of urls) {
+        let u;
+        try { u = new URL(raw); } catch (_) { continue; }
+        if (u.hostname !== 'voirdrama.to' || !u.pathname.startsWith('/wp-content/')) continue;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const r = await fetch(u.href, {
+              headers: { 'User-Agent': UA, Referer: BASE + '/', Accept: 'image/*,*/*;q=0.8' },
+            });
+            if (r.ok && /^image\//i.test(r.headers.get('content-type') || '')) {
+              const img = { type: r.headers.get('content-type'), buf: Buffer.from(await r.arrayBuffer()) };
+              imgCache.set(id, img);
+              if (imgCache.size > 150) imgCache.delete(imgCache.keys().next().value);
+              return send(img);
+            }
+            console.error('[voirdrama] image', r.status, u.href);
+            if (r.status === 404) break; // inutile de réessayer : passer à l'image de repli
+          } catch (e) {
+            console.error('[voirdrama] image erreur', e.message, u.href);
+          }
+          await new Promise((ok) => setTimeout(ok, 400));
+        }
       }
-      res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
-      res.set('Cache-Control', 'public, max-age=86400');
-      res.set('Access-Control-Allow-Origin', '*');
-      res.send(Buffer.from(await r.arrayBuffer()));
+      res.status(502).end();
     } catch (e) {
       res.status(500).end();
     }
@@ -319,7 +345,7 @@ function registerDebug(app) {
           it.test = `HTTP ${r.status} ${r.headers.get('content-type') || ''}`;
           const r2 = await fetch(it.poster, { headers: { 'User-Agent': UA, Referer: BASE + '/' } });
           it.testAvecReferer = `HTTP ${r2.status} ${r2.headers.get('content-type') || ''}`;
-          it.urlDansStremio = proxiedImg(it.poster);
+          it.urlDansStremio = proxiedImg(it.poster, it.thumb);
         } catch (e) {
           it.test = 'erreur : ' + e.message;
         }
