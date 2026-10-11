@@ -47,6 +47,9 @@ async function findStreams(seriesPath, epNum) {
   console.log('TurkVOST DEBUG subs :', JSON.stringify(subHits.slice(0, 8)));
   const scripts = html.match(/<script[^>]+src=["'][^"']+["']/gi) || [];
   console.log('TurkVOST DEBUG scripts :', JSON.stringify(scripts.slice(0, 15)));
+  const noise = /sous-titres fran|hreflang|subtitleLanguage|plyr__captions|Captions —/i;
+  const dyn = (html.match(/.{0,120}(fetch\(|XMLHttpRequest|\/api\/|textTracks|addTextTrack|VTTCue|\.php\?|subs?[\/_=]|"subs"|'subs'|tracks?\s*[:=]).{0,200}/gi) || []).filter((x) => !noise.test(x));
+  console.log('TurkVOST DEBUG dyn :', JSON.stringify(dyn.slice(0, 12)));
 
   const m = html.match(MP4_RE);
   if (!m) { console.log(`TurkVOST ${epUrl} : aucun MP4 trouvé`); return []; }
