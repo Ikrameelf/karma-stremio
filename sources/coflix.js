@@ -191,3 +191,47 @@ const cache = new Map();
 function stream(id, type) {
   let e = cache.get(id);
   if (!e || Date.now() - e.at > 10 * 60 * 1000) {
+    e = { at: Date.now(), value: null };
+    e.promise = streamFull(id, type)
+      .then((v) => {
+        if (v.length) e.value = v;
+        else cache.delete(id);
+        return v;
+      })
+      .catch((err) => {
+        cache.delete(id);
+        throw err;
+      });
+    cache.set(id, e);
+    if (cache.size > 50) cache.delete(cache.keys().next().value);
+  }
+  return e.value ? Promise.resolve(e.value) : e.promise;
+}
+
+// ---------- routes de debug ----------
+
+function registerDebug(app) {
+  // /debug/coflix/search?q=cia
+  app.get('/debug/coflix/search', async (req, res) => {
+    try {
+      res.json(parseList(await get(`${BASE}/filter?keyword=${encodeURIComponent(String(req.query.q || ''))}`)));
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+  // /debug/coflix/stream?id=tt0944947:1:1&type=series
+  app.get('/debug/coflix/stream', async (req, res) => {
+    try {
+      res.json(await streamFull(String(req.query.id || ''), String(req.query.type || 'series')));
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+}
+
+module.exports = {
+  prefix: 'tt', // IDs IMDb, comme Movix
+  types: ['movie', 'series'],
+  stream,
+  registerDebug,
+};
