@@ -35,12 +35,34 @@ async function findSlug(seriesPath) {
   return found;
 }
 
-// La page contient : var allTracks = [{"srclang":"fr","src":"https://.../xxx_fr.vtt?v=..."}, ...];
+// Extrait le tableau JSON après "name = [" en comptant les crochets (sans dépendre d'un ";").
+function extractArray(html, name) {
+  const i = html.search(new RegExp('\\b' + name + '\\s*=\\s*\\['));
+  if (i < 0) return null;
+  const start = html.indexOf('[', i);
+  let depth = 0, inStr = false, esc = false;
+  for (let k = start; k < html.length; k++) {
+    const c = html[k];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '[') depth++;
+    else if (c === ']') { depth--; if (depth === 0) return html.slice(start, k + 1); }
+  }
+  return null;
+}
+
+// La page contient : var allTracks = [{"srclang":"fr","src":"https://.../xxx_fr.vtt?v=..."}, ...]
 function parseSubtitles(html) {
-  const m = html.match(/var\s+allTracks\s*=\s*(\[[\s\S]*?\])\s*;/);
-  if (!m) return [];
+  const raw = extractArray(html, 'allTracks');
+  if (!raw) { console.log('TurkVOST : allTracks introuvable'); return []; }
   let tracks;
-  try { tracks = JSON.parse(m[1]); } catch { return []; }
+  try { tracks = JSON.parse(raw); }
+  catch (e) { console.log('TurkVOST : allTracks illisible :', e.message, raw.slice(0, 200)); return []; }
   return tracks
     .filter((t) => t && t.src && t.srclang)
     .map((t) => {
