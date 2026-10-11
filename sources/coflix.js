@@ -89,7 +89,7 @@ async function findCandidates(titles, kind, season) {
       continue;
     }
     const ok = items.filter((i) => {
-      if (!/^(VF|VOSTFR)$/.test(i.lang)) return false;
+      if (!/^(VF|VOSTFR|TRUEFRENCH)$/.test(i.lang)) return false;
       const m = i.name.match(/saison\s*(\d+)/i);
       if (kind === 'movie') {
         if (m) return false;
