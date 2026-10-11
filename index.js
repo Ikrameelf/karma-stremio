@@ -53,8 +53,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
   try { return { streams: await src.stream(id, type) }; }
   catch (e) { console.error('stream', e.message); return { streams: [] }; }
 });
-
 const app = express();
+app.get('/dbg', async (req, res) => {
+  try {
+    const u = new URL(req.query.u);
+    if (!u.hostname.endsWith('coflix.wiki')) return res.status(400).send('refusé');
+    const r = await axios.get(u.href, {
+      timeout: 10000,
+      responseType: 'text',
+      validateStatus: () => true,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36', Referer: 'https://coflix.wiki/' },
+    });
+    res.type('text/plain').send(String(r.data));
+  } catch (e) {
+    res.status(500).send(String(e.message));
+  }
+});
 app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
 require('./sources/voirdrama').registerDebug(app);
 // Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
