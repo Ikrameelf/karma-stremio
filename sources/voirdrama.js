@@ -10,6 +10,12 @@ const HOSTS_OK = ['voirdrama.to', 'voembed.net']; // utilisé seulement par les 
 const UA =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36';
 const PAGE_SIZE = 16; // nombre de séries par page sur l'accueil
+const PUBLIC = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+
+// Le site bloque l'affichage de ses images ailleurs (HTTP 403 sans Referer) :
+// les affiches passent par la route /voirdrama-img de l'addon, qui envoie le bon Referer.
+const proxiedImg = (u) =>
+  u && PUBLIC ? `${PUBLIC}/voirdrama-img/${Buffer.from(u).toString('base64url')}.jpg` : u;
 
 // ---------- utilitaires ----------
 
@@ -110,7 +116,7 @@ async function catalog(extra = {}) {
     id: `voirdrama:${i.slug}`,
     type: 'series',
     name: i.name,
-    poster: i.poster,
+    poster: proxiedImg(i.poster),
   }));
 }
 
@@ -164,7 +170,7 @@ async function meta(id) {
   const genres = [
     ...new Set([...gBlock.matchAll(/<a[^>]*>([^<]+)<\/a>/gi)].map((m) => decode(m[1]))),
   ];
-  const poster = bigPoster(metaTag(html, 'og:image'));
+  const poster = proxiedImg(bigPoster(metaTag(html, 'og:image')));
 
   // tmdb.enrich complète la fiche ; renvoie la fiche du site telle quelle en cas de problème
   return tmdb.enrich({
@@ -279,6 +285,28 @@ function registerDebug(app) {
     }
   });
 
+  // Affiches : /voirdrama-img/<url en base64url>.jpg (uniquement les images de voirdrama.to)
+  app.get('/voirdrama-img/:id', async (req, res) => {
+    try {
+      const u = new URL(Buffer.from(req.params.id.replace(/\.\w+$/, ''), 'base64url').toString());
+      if (u.hostname !== 'voirdrama.to' || !u.pathname.startsWith('/wp-content/'))
+        return res.status(400).end();
+      const r = await fetch(u.href, {
+        headers: { 'User-Agent': UA, Referer: BASE + '/', Accept: 'image/*,*/*;q=0.8' },
+      });
+      if (!r.ok) {
+        console.error('[voirdrama] image', r.status, u.href);
+        return res.status(502).end();
+      }
+      res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.set('Access-Control-Allow-Origin', '*');
+      res.send(Buffer.from(await r.arrayBuffer()));
+    } catch (e) {
+      res.status(500).end();
+    }
+  });
+
   // Diagnostic des affiches : /debug/voirdrama/catalog
   app.get('/debug/voirdrama/catalog', async (req, res) => {
     try {
@@ -289,6 +317,9 @@ function registerDebug(app) {
           // sans Referer, comme le ferait Stremio
           const r = await fetch(it.poster, { headers: { 'User-Agent': UA } });
           it.test = `HTTP ${r.status} ${r.headers.get('content-type') || ''}`;
+          const r2 = await fetch(it.poster, { headers: { 'User-Agent': UA, Referer: BASE + '/' } });
+          it.testAvecReferer = `HTTP ${r2.status} ${r2.headers.get('content-type') || ''}`;
+          it.urlDansStremio = proxiedImg(it.poster);
         } catch (e) {
           it.test = 'erreur : ' + e.message;
         }
