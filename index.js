@@ -62,12 +62,14 @@ app.get('/dbg', async (req, res) => {
   try {
     const u = new URL(req.query.u);
     if (!u.hostname.endsWith('coflix.wiki')) return res.status(400).send('refusé');
-    const r = await axios.get(u.href, {
+    const r = await axios.request({
+  url: u.href,
+  method: req.query.m === 'POST' ? 'POST' : 'GET',
       timeout: 10000,
       responseType: 'text',
       validateStatus: () => true,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36', Referer: 'https://coflix.wiki/' },
-    });
+      'X-Requested-With': 'XMLHttpRequest', });
     const html = String(r.data);
     let out = html;
     if (req.query.q) {
