@@ -2,6 +2,8 @@
 // Source Voirdrama (site WordPress / thème Madara) pour l'addon karma.
 // Nécessite Node 18+ (fetch global). Format CommonJS.
 
+const { playable } = require('./proxy'); // relais vidéo existant (Referer/Origin)
+
 const BASE = 'https://voirdrama.to';
 const HOSTS_OK = ['voirdrama.to', 'voembed.net']; // utilisé seulement par les routes de debug
 const UA =
@@ -63,13 +65,29 @@ function parseList(html) {
   return [...out.values()];
 }
 
-async function catalog({ skip = 0, search } = {}) {
+const GENRES = [
+  'Action', 'Affaires', 'Amitié', 'Arts martiaux', 'Aventure', 'Comédie', 'Contexte scolaire',
+  'Crime', 'Culinaire', 'Documentaire', 'Drame', 'Famille', 'Fantastique', 'Guerre', 'Historique',
+  'Horreur', 'Jeunesse', 'Judiciaire', 'Mature', 'Médical', 'Mélodrame', 'Militaire', 'Musique',
+  'Mystère', 'Politique', 'Psychologique', 'Romance', 'SF', 'Sitcom', 'Sport', 'Surnaturel',
+  'Thriller', 'Tokusatsu', 'Vie quotidienne', 'Wuxia',
+];
+const genreSlug = (g) =>
+  g.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, '-');
+
+// extra = { skip, search, genre } (chaînes, comme envoyé par Stremio)
+async function catalog(extra = {}) {
+  const skip = parseInt(extra.skip, 10) || 0;
+  const search = extra.search;
+  const p = Math.floor(skip / PAGE_SIZE) + 1;
   let url;
   if (search) {
     if (skip > 0) return []; // pas de pagination sur la recherche
     url = `${BASE}/?s=${encodeURIComponent(search)}&post_type=wp-manga`;
+  } else if (extra.genre) {
+    const root = `${BASE}/drama-genre/${genreSlug(extra.genre)}/`;
+    url = p > 1 ? `${root}page/${p}/` : root;
   } else {
-    const p = Math.floor(skip / PAGE_SIZE) + 1;
     url = p > 1 ? `${BASE}/page/${p}/` : BASE + '/';
   }
   const items = parseList(await get(url));
@@ -193,9 +211,7 @@ function findEmbeds(pageHtml) {
 }
 
 // ---------- flux ----------
-// opts.wrapProxy(url, headers) -> url : fonction du proxy existant (proxy.js) ; optionnel
-
-async function streams(id, opts = {}) {
+async function stream(id, type) {
   const [, slug, ep] = id.split(':');
   const lang = /-vf$/i.test(ep) ? 'VF' : 'VOSTFR';
   const page = await get(`${BASE}/drama/${slug}/${ep}/`);
@@ -210,21 +226,15 @@ async function streams(id, opts = {}) {
     }
     const host = new URL(embed).hostname;
     for (const h of hits) {
-      const headers = { Referer: h.referer, 'User-Agent': UA };
-      if (opts.wrapProxy) {
-        out.push({
-          name: 'Voirdrama',
-          title: `${lang} • ${host}`,
-          url: opts.wrapProxy(h.url, headers),
-        });
-      } else {
-        out.push({
+      const origin = new URL(h.referer).origin;
+      out.push(
+        playable({
           name: 'Voirdrama',
           title: `${lang} • ${host}`,
           url: h.url,
-          behaviorHints: { notWebReady: true, proxyHeaders: { request: headers } },
-        });
-      }
+          headers: { Referer: h.referer, Origin: origin },
+        })
+      );
     }
   }
   return out;
@@ -256,4 +266,14 @@ function registerDebug(app) {
   });
 }
 
-module.exports = { catalog, meta, streams, registerDebug };
+module.exports = {
+  prefix: 'voirdrama:',
+  types: ['series'],
+  catalogId: 'voirdrama',
+  catalogName: 'Voirdrama',
+  genres: GENRES,
+  catalog,
+  meta,
+  stream,
+  registerDebug,
+};
