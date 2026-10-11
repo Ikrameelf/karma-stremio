@@ -87,6 +87,11 @@ async function findStreams(seriesPath, epNum) {
   const m = html.match(MP4_RE);
   if (!m) { console.log(`TurkVOST ${epUrl} : aucun MP4 trouvé`); return []; }
   const url = m[0].replace(/&amp;/g, '&');
+  try {
+    const head = await http.head(url, { headers: HEADERS });
+    const mb = Number(head.headers['content-length']) / 1048576;
+    console.log(`TurkVOST taille : ${mb.toFixed(0)} Mo`);
+  } catch (e) { console.log('TurkVOST taille indisponible :', e.message); }
 
   const stream = playable({ name: 'TurkVOST', title: 'TurkVOST VOSTFR (MP4)', url, headers: HEADERS });
   const subtitles = parseSubtitles(html);
