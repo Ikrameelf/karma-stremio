@@ -5,6 +5,7 @@ const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
 const tmdb = require('./tmdb');
 const youtube = require('./youtube');
+const turkvost = require('./turkvost');
 
 const BASE = 'https://yoturkish.to';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -185,6 +186,11 @@ async function stream(id) {
       }));
   } catch (e) {
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
+  }
+    try {
+    streams.push(...(await turkvost.findStreams(seriesPath, epNum)));
+  } catch (e) {
+    console.log('TurkVOST :', e.message);
   }
   const seen = new Set();
   for (const url of candidates) {
