@@ -219,10 +219,33 @@ function registerDebug(app) {
       res.status(500).json({ error: String(e) });
     }
   });
+
   // /debug/coflix/stream?id=tt0944947:1:1&type=series
   app.get('/debug/coflix/stream', async (req, res) => {
     try {
       res.json(await streamFull(String(req.query.id || ''), String(req.query.type || 'series')));
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
+  // /debug/coflix/embed?u=https://voe.sx/e/xxxx : lecture d'un lecteur + début de sa page
+  app.get('/debug/coflix/embed', async (req, res) => {
+    try {
+      const u = new URL(String(req.query.u || ''));
+      if (!/^(voe\.sx|vidzy\.cc|trakx\.lol|uqload\.(vc|net))$/.test(u.hostname)) {
+        return res.status(400).json({ error: 'hôte non autorisé' });
+      }
+      const links = await resolveEmbed(u.href, BASE + '/');
+      const r = await fetch(u.href, { headers: { 'User-Agent': UA, Referer: BASE + '/' } });
+      const html = await r.text();
+      res.json({
+        links,
+        status: r.status,
+        url_finale: r.url,
+        taille: html.length,
+        extrait: html.replace(/\s+/g, ' ').slice(0, 1500),
+      });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
