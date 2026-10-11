@@ -1,11 +1,13 @@
-// Flux TurkVOST pour les épisodes YoTurkish.
+// Flux TurkVOST (avec sous-titres) pour les épisodes YoTurkish.
 const axios = require('axios');
-const { playable } = require('./proxy');
+const { playable, proxyUrl } = require('./proxy');
 
 const BASE = 'https://turkvost.fr';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const http = axios.create({ timeout: 15000, headers: { 'User-Agent': UA, Referer: BASE + '/' } });
 const MP4_RE = /https?:\/\/videos\.turkvost\.fr\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*/i;
+const LANG3 = { fr: 'fra', en: 'eng', es: 'spa', ar: 'ara', tr: 'tur', de: 'deu', it: 'ita' };
+const HEADERS = { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA };
 
 const slugify = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .replace(/ı/g, 'i').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -33,6 +35,24 @@ async function findSlug(seriesPath) {
   return found;
 }
 
+// La page contient : var allTracks = [{"srclang":"fr","src":"https://.../xxx_fr.vtt?v=..."}, ...];
+function parseSubtitles(html) {
+  const m = html.match(/var\s+allTracks\s*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!m) return [];
+  let tracks;
+  try { tracks = JSON.parse(m[1]); } catch { return []; }
+  return tracks
+    .filter((t) => t && t.src && t.srclang)
+    .map((t) => {
+      const url = new URL(t.src, BASE).href;
+      return {
+        id: `turkvost-${t.srclang}`,
+        lang: LANG3[t.srclang] || t.srclang,
+        url: proxyUrl(url, HEADERS) || url,
+      };
+    });
+}
+
 async function findStreams(seriesPath, epNum) {
   if (!seriesPath || !epNum) return [];
   const slug = await findSlug(seriesPath);
@@ -42,24 +62,15 @@ async function findStreams(seriesPath, epNum) {
   try { html = (await http.get(epUrl, { responseType: 'text' })).data; }
   catch (e) { console.log(`TurkVOST ${epUrl} : ${e.response ? 'HTTP ' + e.response.status : e.message}`); return []; }
 
-  // DEBUG sous-titres (à retirer ensuite)
-  const subHits = html.match(/.{0,100}(\.vtt|\.srt|<track|subtitle|captions|sous-titre).{0,150}/gi) || [];
-  console.log('TurkVOST DEBUG subs :', JSON.stringify(subHits.slice(0, 8)));
-  const scripts = html.match(/<script[^>]+src=["'][^"']+["']/gi) || [];
-  console.log('TurkVOST DEBUG scripts :', JSON.stringify(scripts.slice(0, 15)));
-  const noise = /sous-titres fran|hreflang|subtitleLanguage|plyr__captions|Captions —/i;
-  const dyn = (html.match(/.{0,120}(fetch\(|XMLHttpRequest|\/api\/|textTracks|addTextTrack|VTTCue|\.php\?|subs?[\/_=]|"subs"|'subs'|tracks?\s*[:=]).{0,200}/gi) || []).filter((x) => !noise.test(x));
-  console.log('TurkVOST DEBUG dyn :', JSON.stringify(dyn.slice(0, 12)));
-
   const m = html.match(MP4_RE);
   if (!m) { console.log(`TurkVOST ${epUrl} : aucun MP4 trouvé`); return []; }
   const url = m[0].replace(/&amp;/g, '&');
-  return [playable({
-    name: 'TurkVOST',
-    title: 'TurkVOST VOSTFR (MP4)',
-    url,
-    headers: { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA },
-  })];
+
+  const stream = playable({ name: 'TurkVOST', title: 'TurkVOST VOSTFR (MP4)', url, headers: HEADERS });
+  const subtitles = parseSubtitles(html);
+  if (subtitles.length) stream.subtitles = subtitles;
+  console.log(`TurkVOST ${epUrl} : MP4 + ${subtitles.length} sous-titre(s)`);
+  return [stream];
 }
 
 module.exports = { findStreams };
