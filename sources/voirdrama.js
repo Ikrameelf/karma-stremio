@@ -3,6 +3,7 @@
 // Nécessite Node 18+ (fetch global). Format CommonJS.
 
 const { playable } = require('./proxy'); // relais vidéo existant (Referer/Origin)
+const tmdb = require('./tmdb'); // enrichissement des fiches (comme pour YoTurkish)
 
 const BASE = 'https://voirdrama.to';
 const HOSTS_OK = ['voirdrama.to', 'voembed.net']; // utilisé seulement par les routes de debug
@@ -144,12 +145,22 @@ async function meta(id) {
   const langs = new Set(eps.map((e) => e.lang));
   const both = langs.size > 1; // VOSTFR en saison 1, VF en saison 2 pour éviter les doublons
 
-  return {
+  // genres du site : uniquement dans le bloc de la fiche (le menu contient tous les genres)
+  const gBlock = (html.match(/genres-content[^>]*>([\s\S]*?)<\/div>/i) || [])[1] || '';
+  const genres = [
+    ...new Set([...gBlock.matchAll(/<a[^>]*>([^<]+)<\/a>/gi)].map((m) => decode(m[1]))),
+  ];
+  const poster = bigPoster(metaTag(html, 'og:image'));
+
+  // tmdb.enrich complète la fiche ; renvoie la fiche du site telle quelle en cas de problème
+  return tmdb.enrich({
     id,
     type: 'series',
     name: (metaTag(html, 'og:title') || slug).replace(/\s*[-–|]\s*Voirdrama.*$/i, ''),
-    poster: bigPoster(metaTag(html, 'og:image')),
+    poster,
+    background: poster,
     description: metaTag(html, 'og:description'),
+    genres: genres.length ? genres : undefined,
     videos: eps.map((e) => ({
       id: `voirdrama:${slug}:${e.ep}`,
       title: `Épisode ${e.num} (${e.lang.toUpperCase()})`,
@@ -157,7 +168,7 @@ async function meta(id) {
       episode: e.num,
       released: new Date(Date.UTC(2000, 0, e.num)).toISOString(),
     })),
-  };
+  });
 }
 
 // ---------- extraction du lecteur ----------
