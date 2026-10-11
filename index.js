@@ -3,6 +3,7 @@ process.on('uncaughtException', (e) => console.error('uncaughtException', e && e
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e && e.message ? e.message : e));
 
 const express = require('express');
+const axios = require('axios');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const proxy = require('./sources/proxy');
 
@@ -53,26 +54,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
   try { return { streams: await src.stream(id, type) }; }
   catch (e) { console.error('stream', e.message); return { streams: [] }; }
 });
+
 const app = express();
-app.get('/dbg', async (req, res) => {
-  try {
-    const u = new URL(req.query.u);
-    if (!u.hostname.endsWith('coflix.wiki')) return res.status(400).send('refusé');
-    const r = await axios.get(u.href, {
-      timeout: 10000,
-      responseType: 'text',
-      validateStatus: () => true,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36', Referer: 'https://coflix.wiki/' },
-    });
-    res.type('text/plain').send(String(r.data));
-  } catch (e) {
-    res.status(500).send(String(e.message));
-  }
-});
-app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
-require('./sources/voirdrama').registerDebug(app);
-// Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
-const axios = require('axios');
+
+// Route temporaire : /dbg?u=<url coflix>&q=<regex> affiche le code d'une page (ou les passages qui correspondent).
 app.get('/dbg', async (req, res) => {
   try {
     const u = new URL(req.query.u);
@@ -99,6 +84,20 @@ app.get('/dbg', async (req, res) => {
     res.status(500).send(String(e.message));
   }
 });
+
+app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
+require('./sources/voirdrama').registerDebug(app);
+
+// Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
+app.get('/debug', async (req, res) => {
+  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+  const probe = async (url) => {
+    try {
+      const r = await axios.get(url, { timeout: 8000, headers: { 'User-Agent': UA }, validateStatus: () => true, responseType: 'text' });
+      const html = String(r.data);
+      return { status: r.status, serveur: r.headers.server || null, octets: html.length, cartes: (html.match(/class="item/g) || []).length };
+    } catch (e) { return { erreur: e.code || e.message }; }
+  };
   const mem = process.memoryUsage();
   res.json({
     version: manifest.version,
