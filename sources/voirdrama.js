@@ -45,6 +45,24 @@ const bigPoster = (u) => (u ? u.replace(/-\d+x\d+(\.\w+)$/, '$1') : u);
 
 // ---------- catalogue ----------
 
+// Cherche la meilleure URL d'image dans une balise <img> (gère le lazy-loading et srcset)
+function imgUrl(tag) {
+  const attr = (n) => (tag.match(new RegExp(`\\s${n}="([^"]+)"`, 'i')) || [])[1];
+  const srcset = attr('data-srcset') || attr('srcset');
+  const cands = [
+    attr('data-src'), attr('data-lazy-src'), attr('data-original'), attr('data-cfsrc'),
+    srcset && srcset.split(',').pop().trim().split(/\s+/)[0],
+    attr('src'),
+  ];
+  for (const c of cands) {
+    if (!c || /^data:/i.test(c)) continue;
+    try {
+      return bigPoster(new URL(decode(c), BASE).href);
+    } catch (_) {}
+  }
+  return undefined;
+}
+
 function parseList(html) {
   const out = new Map();
   const re =
@@ -53,15 +71,11 @@ function parseList(html) {
   while ((m = re.exec(html))) {
     const slug = m[1];
     if (out.has(slug)) continue;
-    const before = html.slice(Math.max(0, m.index - 1500), m.index);
-    const imgs = [
-      ...before.matchAll(/<img[^>]+(?:data-src|src)="([^"]+\/wp-content\/uploads\/[^"]+)"/gi),
-    ];
-    out.set(slug, {
-      slug,
-      name: decode(m[2]),
-      poster: imgs.length ? bigPoster(imgs[imgs.length - 1][1]) : undefined,
-    });
+    const before = html.slice(Math.max(0, m.index - 2500), m.index);
+    const tags = [...before.matchAll(/<img\b[^>]*>/gi)].map((t) => t[0]);
+    let poster;
+    for (let i = tags.length - 1; i >= 0 && !poster; i--) poster = imgUrl(tags[i]); // la plus proche du titre
+    out.set(slug, { slug, name: decode(m[2]), poster });
   }
   return [...out.values()];
 }
@@ -262,6 +276,26 @@ function registerDebug(app) {
       res.type('text/plain').send(await get(u.href, { referer: String(req.query.ref || BASE + '/') }));
     } catch (e) {
       res.status(500).send(String(e));
+    }
+  });
+
+  // Diagnostic des affiches : /debug/voirdrama/catalog
+  app.get('/debug/voirdrama/catalog', async (req, res) => {
+    try {
+      const items = parseList(await get(BASE + '/')).slice(0, 5);
+      for (const it of items) {
+        if (!it.poster) { it.test = 'aucune affiche trouvée dans le HTML'; continue; }
+        try {
+          // sans Referer, comme le ferait Stremio
+          const r = await fetch(it.poster, { headers: { 'User-Agent': UA } });
+          it.test = `HTTP ${r.status} ${r.headers.get('content-type') || ''}`;
+        } catch (e) {
+          it.test = 'erreur : ' + e.message;
+        }
+      }
+      res.json(items);
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
     }
   });
 
