@@ -192,6 +192,7 @@ async function meta(id) {
       title: `Épisode ${e.num} (${e.lang.toUpperCase()})`,
       season: both && e.lang === 'vf' ? 2 : 1,
       episode: e.num,
+      thumbnail: poster, // repli si TMDB n'a pas d'image pour l'épisode
       released: new Date(Date.UTC(2000, 0, e.num)).toISOString(),
     })),
   });
@@ -244,7 +245,7 @@ function findEmbeds(pageHtml) {
   const set = new Set();
   for (const m of pageHtml.matchAll(/<iframe[^>]+(?:src|data-src)="([^"]+)"/gi)) set.add(decode(m[1]));
   for (const m of pageHtml.matchAll(/https?:\/\/[^\s"'<>]+\/embed[^\s"'<>]*/gi)) set.add(decode(m[0]));
-  return [...set].filter((u) => /^https?:/.test(u) && !/disqus|facebook|google|twitter/i.test(u));
+  return [...set].filter((u) => /^https?:/.test(u) && !/disqus|facebook|google|twitter|wp-json|oembed/i.test(u));
 }
 
 // ---------- flux ----------
