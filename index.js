@@ -8,7 +8,7 @@ const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const proxy = require('./sources/proxy');
 
 // Chaque source exporte { prefix, types, stream } et, en option, { catalogId, catalogName, genres, catalog, meta }.
-const sources = [require('./sources/yoturkish'), require('./sources/movix'), require('./sources/voirdrama')];
+const sources = [require('./sources/yoturkish'), require('./sources/movix'), require('./sources/voirdrama'), require('./sources/coflix')];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
 
