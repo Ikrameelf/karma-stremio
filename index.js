@@ -1,6 +1,6 @@
 // Un flux vidéo interrompu (téléphone qui ferme la lecture, serveur distant coupé) ne doit jamais faire tomber l'addon.
-process.on('uncaughtException', (e) => console.error('uncaughtException', e && e.message));
-process.on('unhandledRejection', (e) => console.error('unhandledRejection', e && e.message ? e.message : e));
+process.on('uncaughtException', (e) => console.error('uncaughtException', e && e.stack));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection', e && e.stack ? e.stack : e));
 
 const express = require('express');
 const axios = require('axios');
