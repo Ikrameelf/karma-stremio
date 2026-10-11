@@ -56,6 +56,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
 const app = express();
 app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
+require('./sources/voirdrama').registerDebug(app);
 // Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
 const axios = require('axios');
 app.get('/debug', async (req, res) => {
