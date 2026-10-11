@@ -7,7 +7,7 @@ const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const proxy = require('./sources/proxy');
 
 // Chaque source exporte { prefix, types, stream } et, en option, { catalogId, catalogName, genres, catalog, meta }.
-const sources = [require('./sources/yoturkish'), require('./sources/movix')];
+const sources = [require('./sources/yoturkish'), require('./sources/movix'), require('./sources/voirdrama')];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
 
@@ -59,6 +59,7 @@ app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
 // Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
 const axios = require('axios');
 app.get('/debug', async (req, res) => {
+  require('./sources/voirdrama').registerDebug(app);
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
   const probe = async (url) => {
     try {
