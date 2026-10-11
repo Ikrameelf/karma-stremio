@@ -1,4 +1,4 @@
-// Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, etc.).
+// Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
 
@@ -155,6 +155,7 @@ async function xfsDownload(html, pageUrl) {
   }
   return [];
 }
+
 // Voe : le lien est caché dans un JSON obfusqué (<script type="application/json">["..."]</script>).
 const rot13 = (s) =>
   s.replace(/[a-z]/gi, (c) => {
@@ -225,10 +226,12 @@ async function resolveEmbed(url, referer) {
       const viaMd5 = await passMd5(html, url);
       if (viaMd5.length) return viaMd5;
     }
-        if (!found.length) {
+    if (!found.length) {
       const viaVoe = await tryVoe(html, url, referer);
       if (viaVoe.length) return viaVoe;
     }
+    if (!found.length) {
+      const viaXfs = await tryXfs(url, html, referer);
       if (viaXfs.length) return viaXfs;
     }
     if (!found.length) {
