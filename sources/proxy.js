@@ -16,7 +16,7 @@ const sign = (u, h) => crypto.createHmac('sha256', SECRET).update(u + '\n' + h).
 
 function proxyUrl(target, headers) {
   if (!PUBLIC) return null;
-  const ext = (target.match(/\.(m3u8|mp4|mkv|webm|ts|m4s|aac|key)(?=$|\?)/i) || [])[1] || 'bin';
+  const ext = (target.match(/\.(m3u8|mp4|mkv|webm|ts|m4s|aac|key|vtt|srt)(?=$|\?)/i) || [])[1] || 'bin';
   const u = b64(target);
   const h = b64(JSON.stringify(headers || {}));
   return `${PUBLIC}/proxy/${u}/${h}/${sign(u, h)}/v.${ext.toLowerCase()}`;
