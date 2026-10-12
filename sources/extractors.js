@@ -1,3 +1,5 @@
+
+
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
@@ -51,7 +53,7 @@ async function passMd5(html, pageUrl) {
   if (!md5) return [];
   const token = md5[0].split('/').pop();
   const { data: base } = await axios.get(u.origin + md5[0], {
-    timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: pageUrl },
+    timeout: 9000, responseType: 'text', headers: { 'User-Agent': UA, Referer: pageUrl },
   });
   if (!/^https?:/.test(String(base))) return [];
   const rand = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('');
@@ -209,7 +211,17 @@ async function tryVoe(html, pageUrl, referer, depth = 1) {
 }
 
 // Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
-async function resolveEmbed(url, referer) {
+function nextHop(html, pageUrl) {
+  const h = String(html);
+  const m = h.match(/window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/)
+    || h.match(/location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)/)
+    || h.match(/<iframe[^>]+src=["']([^"']+)["']/i)
+    || h.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+url=([^"'>\s]+)/i);
+  if (!m) return null;
+  try { return new URL(m[1].replace(/&amp;/g, '&'), pageUrl).href; } catch { return null; }
+}
+
+async function resolveEmbed(url, referer, depth = 2) {
   let origin;
   try { origin = new URL(url).origin; } catch { return []; }
   try {
@@ -222,6 +234,13 @@ async function resolveEmbed(url, referer) {
     });
     const html = typeof data === 'string' ? data : JSON.stringify(data);
     const found = candidates(html + '\n' + unpackAll(html), url);
+    if (!found.length && depth > 0) {
+      const next = nextHop(html, url);
+      if (next && next !== url) {
+        console.log(`  ↳ suite : ${next.slice(0, 120)}`);
+        return resolveEmbed(next, url, depth - 1);
+      }
+    }
     if (!found.length && /\/pass_md5\//.test(html)) {
       const viaMd5 = await passMd5(html, url);
       if (viaMd5.length) return viaMd5;
@@ -256,3 +275,4 @@ async function resolveEmbed(url, referer) {
 }
 
 module.exports = { resolveEmbed, unpackAll };
+
