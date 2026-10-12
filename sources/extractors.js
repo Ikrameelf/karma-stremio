@@ -1,9 +1,11 @@
 
 
+
+
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
-
+const { resolveExtra } = require('./extractors-extra');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const VIDEO = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
 const NOISE = /\.(jpe?g|png|webp|gif|svg|vtt|srt)(\?|$)/i;
@@ -34,7 +36,7 @@ function candidates(text, pageUrl) {
     } catch { /* URL invalide */ }
   };
   const patterns = [
-    /file\s*:\s*["']([^"']+)["']/gi,
+    /file\s*:\s*["']([^"']+)["']/gi, /:\s*"([^"]*m3u8[^"]*)"/gi,
     /sources\s*:\s*\[\s*["']([^"']+)["']/gi,
     /<source[^>]+src=["']([^"']+)["']/gi,
     /property=["']og:video(?::\w+)?["'][^>]+content=["']([^"']+)["']/gi,
@@ -46,7 +48,7 @@ function candidates(text, pageUrl) {
 }
 
 // Méthode "pass_md5" (Doodstream et clones) : la page publie un chemin /pass_md5/... qui donne la base du lien vidéo.
-const DOOD = /(^|\.)(dood|d0o0d|d000d|ds2play|doodstream|dooood|dsvplay)[\w-]*\./i;
+const DOOD = /(^|\.)(dood|d0o0d|d000d|ds2play|doodstream|dooood|dsvplay|myvidplay|playmogo|vide0|doply)[\w-]*\./i;
 async function passMd5(html, pageUrl) {
   const u = new URL(pageUrl);
   const md5 = String(html).match(/\/pass_md5\/[^'"\s]+/);
@@ -62,7 +64,7 @@ async function passMd5(html, pageUrl) {
 async function resolveDood(url) {
   const u = new URL(url);
   const embed = `${u.origin}/e/${u.pathname.split('/').filter(Boolean).pop()}`;
-  const { data: html } = await axios.get(embed, { timeout: 4000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
+  const { data: html } = await axios.get(embed, { timeout: 9000, responseType: 'text', headers: { 'User-Agent': UA, Referer: u.origin + '/' } });
   return passMd5(html, embed);
 }
 
@@ -82,7 +84,7 @@ async function tryXfs(url, html, referer) {
   const results = await Promise.all(tries.map(async (t) => {
     try {
       const { data } = await axios.get(t, {
-        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: referer || u.origin + '/' },
       });
       const h = String(data);
@@ -115,7 +117,7 @@ async function xfsDownload(html, pageUrl) {
     try {
       const origin = new URL(dl).origin;
       const page = await axios.get(dl, {
-        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: pageUrl },
       });
       const h = String(page.data);
@@ -199,7 +201,7 @@ async function tryVoe(html, pageUrl, referer, depth = 1) {
     try {
       const next = new URL(redirect[1], pageUrl).href;
       const { data } = await axios.get(next, {
-        timeout: 4000, maxContentLength: 1500000, responseType: 'text',
+        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: referer || pageUrl },
       });
       return tryVoe(typeof data === 'string' ? data : JSON.stringify(data), next, referer, depth - 1);
@@ -226,8 +228,10 @@ async function resolveEmbed(url, referer, depth = 2) {
   try { origin = new URL(url).origin; } catch { return []; }
   try {
     if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
+const extra = await resolveExtra(url, referer);
+if (extra && extra.length) return extra;
     const { data } = await axios.get(url, {
-      timeout: 4000,
+      timeout: 9000,
       maxContentLength: 1500000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
