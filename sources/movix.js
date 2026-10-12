@@ -1,8 +1,21 @@
 
 
 
+
+
 // Port Stremio du provider CloudStream "Movix" (Cs-Karma) : addon de STREAMS uniquement.
 // Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
+function pLimit(n) {
+  let active = 0; const queue = [];
+  const next = () => {
+    if (active >= n || !queue.length) return;
+    active++;
+    const { fn, res, rej } = queue.shift();
+    fn().then(res, rej).finally(() => { active--; next(); });
+  };
+  return (fn) => new Promise((res, rej) => { queue.push({ fn, res, rej }); next(); });
+}
+const embedLimit = pLimit(4);
 const axios = require('axios');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
@@ -174,7 +187,7 @@ async function streamFull(id, type) {
   const resolved = await Promise.all(
     embeds.slice(0, 20).map(async ({ brand, url }) => {
       const host = new URL(url).hostname.replace(/^www\./, '');
-      const links = await resolveEmbed(url, HEADERS.Referer);
+      const links = await embedLimit(() => resolveEmbed(url, HEADERS.Referer));
       console.log(`Movix embed ${host}: ${links.length} lien(s) vidéo`);
       return links.length
         ? links.map((l) => playable({ name: `Movix ${brand}`, title: `${host} · ${l.kind}`, url: l.url, headers: l.headers }))
