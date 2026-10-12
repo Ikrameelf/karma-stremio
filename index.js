@@ -14,6 +14,7 @@ const sources = [
   require('./sources/movix'),
   require('./sources/voirdrama'),
   require('./sources/coflix'),
+  js     require('./sources/dulourd'),
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
