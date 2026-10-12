@@ -35,20 +35,46 @@ const html = async (url, headers = {}) => String((await http.get(url, { headers,
 
 function parseCards($) {
   const out = new Map();
-  $('div#dle-content > article, article.movie-box, div.item').each((_, el) => {
-    const root = $(el);
-    const a = root.find('div.name > a, h2 a, h3 a, a[href*="/voir-series/"]').first();
-    const title = (a.attr('title') || a.text() || '').trim();
+
+  // Dulourd a plusieurs gabarits de cartes : ne pas dépendre uniquement de
+  // #dle-content > article / .movie-box / .item, qui peuvent ne pas exister.
+  // On prend les liens de fiches série (ID numérique + slug), en excluant
+  // les liens de navigation comme /voir-series/drame_s/.
+  $('a[href*="/voir-series/"]').each((_, el) => {
+    const a = $(el);
     const href = abs(a.attr('href'));
-    if (!title || !href || !href.includes('/voir-series/')) return;
-    const img = root.find('div.img img, img').first();
-    const poster = abs(img.attr('data-src') || img.attr('src') || img.attr('data-original'), href);
+    if (!href || !isSite(href)) return;
+
+    let pathname;
+    try { pathname = new URL(href).pathname; } catch { return; }
+    if (!/^\/voir-series\/[^/]+\/\d+-[^/]+\.html$/i.test(pathname)) return;
+
+    const title = (a.attr('title') || a.attr('data-title') || a.text() || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+
+    // Cherche l'image dans le lien ou dans ses conteneurs proches : le HTML
+    // de Dulourd n'utilise pas toujours la même structure de carte.
+    let img = a.find('img').first();
+    if (!img.length) img = a.closest('article, .item, .short, .movie-box, .movie-item, li, div').find('img').first();
+    const poster = abs(
+      img.attr('data-src') || img.attr('data-original') || img.attr('data-lazy-src') || img.attr('src'),
+      href
+    );
+
     const id = 'dulourd:' + b64(pathOf(href));
-    if (!out.has(id)) out.set(id, { id, type: 'series', name: title, poster: poster || undefined, posterShape: 'poster' });
+    if (!out.has(id)) {
+      out.set(id, {
+        id,
+        type: 'series',
+        name: title,
+        ...(poster ? { poster } : {}),
+        posterShape: 'poster',
+      });
+    }
   });
+
   return [...out.values()];
 }
-
 async function catalog({ genre, search, skip = 0 } = {}) {
   const page = Math.max(1, Math.floor(Number(skip || 0) / 20) + 1);
   let url;
