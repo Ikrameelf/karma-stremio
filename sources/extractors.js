@@ -247,6 +247,10 @@ if (extra && extra.length) return extra;
       if (next && next !== url) {
         console.log(`  ↳ suite : ${next.slice(0, 120)}`);
         return resolveEmbed(next, url, depth - 1);
+        if (/<script[^>]+type=["']application\/json["']/i.test(html)) {
+  const viaVoe = await tryVoe(html, url, referer);
+  if (viaVoe.length) return viaVoe;
+}
       }
     }
     if (!found.length && /\/pass_md5\//.test(html)) {
