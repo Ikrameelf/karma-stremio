@@ -1,8 +1,3 @@
-
-
-
-
-
 // Port Stremio du provider CloudStream "Movix" (Cs-Karma) : addon de STREAMS uniquement.
 // Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
 function pLimit(n) {
@@ -19,6 +14,7 @@ const embedLimit = pLimit(4);
 const axios = require('axios');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
+const P = require('./movix-parsers');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
@@ -102,6 +98,9 @@ function extractUrls(data) {
 
 const asJson = (d) => { if (typeof d !== 'string') return d; try { return JSON.parse(d); } catch { return null; } };
 
+// Parseur par épisode (movix-parsers.js) ; si la réponse n'est pas du JSON (null), repli sur le parseur générique.
+const pick = (parsedUrls, fallbackUrls) => ({ urls: parsedUrls ?? fallbackUrls, direct: [] });
+
 // Purstream : le Kotlin prend la DERNIÈRE source et utilise l'URL du flux comme Referer.
 function parsePurstream(data) {
   const j = asJson(data);
@@ -139,23 +138,37 @@ async function streamFull(id, type) {
   const tmdb = await toTmdbId(imdb, kind);
   if (!tmdb) return [];
 
-  const results = await Promise.allSettled(
-    endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
-      try {
-        const res = await axios.get(url, { headers: HEADERS, timeout: 8000, validateStatus: (c) => c < 400 });
-        let parsed;
-        if (brand === 'Purstream') parsed = parsePurstream(res.data);
-        else if (brand === 'J1F') parsed = parseJ1F(res.data);
-        else parsed = { urls: extractUrls(res.data), direct: [] };
-        console.log(`Movix ${brand}: HTTP ${res.status}, ${parsed.urls.length + parsed.direct.length} lien(s)`);
-        return { brand, urls: parsed.urls, direct: parsed.direct };
-      } catch (err) {
-        const code = err.response ? `HTTP ${err.response.status}` : err.code || err.message;
-        console.log(`Movix ${brand}: ÉCHEC (${code}) ${url}`);
+  const tasks = endpoints(API, kind, tmdb, imdb, s, e).map(async ([brand, url]) => {
+    try {
+      const res = await axios.get(url, { headers: HEADERS, timeout: 8000, validateStatus: (c) => c < 400 });
+      let parsed;
+      if (brand === 'Purstream') parsed = parsePurstream(res.data);
+      else if (brand === 'J1F') parsed = parseJ1F(res.data);
+      else if (brand === 'FStream') parsed = pick(P.parseFstream(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'Wiflix') parsed = pick(P.parseWiflix(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'SwiftFlow') parsed = pick(P.parseSwiftflow(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'IMDB') parsed = pick(P.parseImdb(res.data, kind === 'movie' ? null : e, s), extractUrls(res.data));
+      else parsed = { urls: extractUrls(res.data), direct: [] };
+      console.log(`Movix ${brand}: HTTP ${res.status}, ${parsed.urls.length + parsed.direct.length} lien(s)`);
+      return { brand, urls: parsed.urls, direct: parsed.direct };
+    } catch (err) {
+      const code = err.response ? `HTTP ${err.response.status}` : err.code || err.message;
+      console.log(`Movix ${brand}: ÉCHEC (${code}) ${url}`);
+      throw err;
+    }
+  });
+
+  // Source "download" du Kotlin (videolinks) : recherche par titre puis m3u8/mp4 directs.
+  tasks.push(
+    P.movixDownload(API, HEADERS, kind, tmdb, s, e)
+      .then((r) => { console.log(`Movix DL: ${r.direct.length} lien(s)`); return r; })
+      .catch((err) => {
+        console.log(`Movix DL: ÉCHEC (${err.response ? 'HTTP ' + err.response.status : err.code || err.message})`);
         throw err;
-      }
-    })
+      })
   );
+
+  const results = await Promise.allSettled(tasks);
 
   const seen = new Set();
   const direct = [];
@@ -183,9 +196,12 @@ async function streamFull(id, type) {
     }
   }
 
+  // Hôtes connus (Voe, Uqload, Vidmoly...) en premier pour qu'ils ne tombent pas au-delà de la limite de 20.
+  const ordered = P.prioritize(embeds);
+
   // Tente d'extraire un lien vidéo de chaque page d'embed (en parallèle, limité pour rester rapide).
   const resolved = await Promise.all(
-    embeds.slice(0, 20).map(async ({ brand, url }) => {
+    ordered.slice(0, 20).map(async ({ brand, url }) => {
       const host = new URL(url).hostname.replace(/^www\./, '');
       const links = await embedLimit(() => resolveEmbed(url, HEADERS.Referer));
       console.log(`Movix embed ${host}: ${links.length} lien(s) vidéo`);
@@ -194,7 +210,7 @@ async function streamFull(id, type) {
         : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
     })
   );
-  const extra = embeds.slice(20).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
+  const extra = ordered.slice(20).map(({ brand, url }) => ({ name: `Movix ${brand}`, title: 'Ouvrir dans le navigateur', externalUrl: url }));
   const all = [...direct, ...resolved.flat(), ...extra];
   const playableLinks = all.filter((x) => x.url);
   const browserLinks = all.filter((x) => !x.url);
