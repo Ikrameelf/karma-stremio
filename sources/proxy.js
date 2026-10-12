@@ -21,7 +21,10 @@ function proxyUrl(target, headers) {
   const h = b64(JSON.stringify(headers || {}));
   return `${PUBLIC}/proxy/${u}/${h}/${sign(u, h)}/v.${ext.toLowerCase()}`;
 }
-
+console.log(
+  'Proxy vidéo :',
+  PUBLIC ? `ACTIF (${PUBLIC})` : 'INACTIF — URL publique absente'
+);
 // Construit l'objet "stream" Stremio : via le relais si possible, sinon avec proxyHeaders (tablette/TV).
 function playable({ name, title, url, headers }) {
   const p = proxyUrl(url, headers);
