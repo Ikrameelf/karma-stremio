@@ -5,6 +5,7 @@
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
+const { limited } = require('./throttle');
 const { resolveExtra } = require('./extractors-extra');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const VIDEO = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
@@ -230,12 +231,15 @@ async function resolveEmbed(url, referer, depth = 2) {
     if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
 const extra = await resolveExtra(url, referer);
 if (extra && extra.length) return extra;
-    const { data } = await axios.get(url, {
+    const pageReq = () => axios.get(url, {
       timeout: 9000,
       maxContentLength: 1500000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
+    // flixeo répond 429 quand on l'appelle en rafale : une requête à la fois, avec pause et nouvel essai.
+    const host = new URL(url).hostname;
+    const { data } = /flixeo\./i.test(host) ? await limited('flixeo', pageReq) : await pageReq();
     const html = typeof data === 'string' ? data : JSON.stringify(data);
     const found = candidates(html + '\n' + unpackAll(html), url);
     if (!found.length && depth > 0) {

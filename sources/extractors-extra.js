@@ -114,14 +114,24 @@ async function vidzy(url, referer) {
   if (!m) return [];
   const host = 'vidzy.cc';
   const embed = `https://${host}/embed-${m[1]}.html`;
-  const html = String((await axios.get(embed, {
-    timeout: T, responseType: 'text', headers: { 'User-Agent': UA, Referer: referer || `https://${host}/` },
-  })).data);
-
-  const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
+  const findScript = (h) => [...h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
     .map((x) => x[1])
     .find((s) => s.includes('sources:') && s.includes('m3u8'));
-  if (!script) { console.log('  ↳ VIDZY : script du lecteur introuvable'); return []; }
+  let script = null;
+  // La page peut être une page d'attente (« Chargement de la vidéo ») : un second essai après quelques secondes.
+  for (let attempt = 1; attempt <= 2 && !script; attempt++) {
+    const html = String((await axios.get(embed, {
+      timeout: T, responseType: 'text', headers: { 'User-Agent': UA, Referer: referer || `https://${host}/` },
+    })).data);
+    script = findScript(html);
+    if (!script) {
+      const title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] || '?';
+      console.log(`  ↳ VIDZY : script du lecteur introuvable (essai ${attempt}/2, ${html.length} octets, titre « ${title.trim()} »)`);
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 3000));
+      else console.log(`  ↳ VIDZY EXTRAIT : ${html.replace(/\s+/g, ' ').slice(0, 800)}`);
+    }
+  }
+  if (!script) return [];
 
   const encoded = (script.match(/\}\)\("([A-Za-z0-9+/=]+)"\)/) || [])[1];
   if (!encoded) return [];
