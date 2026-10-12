@@ -154,7 +154,7 @@ async function streamFull(id, type) {
             const host = new URL(link).hostname.replace(/^www\./, '');
             let links = [];
             try {
-              links = await withTimeout(resolveEmbed(link, BASE + '/'), 9000);
+              links = await withTimeout(resolveEmbed(link, BASE + '/'), 18000);
             } catch (err) {
               console.error('[coflix] extraction échouée', host, err.message);
             }
