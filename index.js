@@ -139,3 +139,13 @@ app.get('/debug', async (req, res) => {
 app.use('/', getRouter(builder.getInterface()));
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
+const fs = require('./sources/frenchstream');
+app.get('/debug/fs', async (req, res) => {
+  try {
+    const html = await fs.get(req.query.u);
+    const lines = html.split('\n').filter((l) => /iframe|data-|player|embed|ajax|\.php/i.test(l));
+    res.type('text/plain').send(lines.join('\n').slice(0, 20000));
+  } catch (e) {
+    res.type('text/plain').send('ERREUR ' + e.message);
+  }
+});
