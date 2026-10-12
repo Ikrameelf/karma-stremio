@@ -1,5 +1,6 @@
 // Port Stremio du provider CloudStream "Movix" (Cs-Karma) : addon de STREAMS uniquement.
 // Le catalogue et les fiches viennent de Cinemeta : Movix s'affiche sur les titres Stremio normaux (IDs IMDb).
+// Fichier AUTONOME : les parseurs par épisode et la source "download" sont intégrés ici.
 function pLimit(n) {
   let active = 0; const queue = [];
   const next = () => {
@@ -14,7 +15,6 @@ const embedLimit = pLimit(4);
 const axios = require('axios');
 const { resolveEmbed } = require('./extractors');
 const { playable } = require('./proxy');
-const P = require('./movix-parsers');
 
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
@@ -96,10 +96,102 @@ function extractUrls(data) {
   return [...new Set(text.match(/https?:\/\/[^"'\s\\<>]+/g) || [])].filter((u) => !NOISE.test(u));
 }
 
-const asJson = (d) => { if (typeof d !== 'string') return d; try { return JSON.parse(d); } catch { return null; } };
+const asJson = (d) => { if (typeof d !== 'string') return d; try { return JSON.parse(d); } catch (_) { return null; } };
+const txt = (d) => (typeof d === 'string' ? d : JSON.stringify(d));
 
-// Parseur par épisode (movix-parsers.js) ; si la réponse n'est pas du JSON (null), repli sur le parseur générique.
-const pick = (parsedUrls, fallbackUrls) => ({ urls: parsedUrls ?? fallbackUrls, direct: [] });
+// ───────── Parseurs par épisode (portage de MovixLinks.kt) ─────────
+// Chacun renvoie un tableau d'URLs, ou null si la réponse n'est pas du JSON (→ repli sur extractUrls).
+const sameEp = (a, b) => a != null && b != null && (String(a) === String(b) || (Number.isFinite(+a) && +a === +b));
+const urlsOf = (arr) => (Array.isArray(arr) ? arr : []).map((x) => x && (x.url || x.link)).filter(Boolean);
+const findKey = (obj, ep) => Object.keys(obj || {}).find((k) => sameEp(k, ep));
+const pick = (parsedUrls, fallbackUrls) => ({ urls: parsedUrls != null ? parsedUrls : fallbackUrls, direct: [] });
+
+// FStream : film = players{langue:[{url}]}, série = episodes{n:{languages{langue:[{url}]}}}
+function parseFstream(data, type, ep) {
+  const j = asJson(data);
+  if (!j) return null;
+  if (type === 'movie') return Object.values(j.players || j.links || {}).flatMap(urlsOf);
+  const k = findKey(j.episodes, ep);
+  return k ? Object.values(j.episodes[k].languages || {}).flatMap(urlsOf) : [];
+}
+
+// Wiflix : film = players{vf,vostfr}, série = episodes{n:{vf,vostfr}}
+function parseWiflix(data, type, ep) {
+  const j = asJson(data);
+  if (!j) return null;
+  const k = findKey(j.episodes, ep);
+  const box = type === 'movie' ? j.players : (k && j.episodes[k]);
+  return box ? [...urlsOf(box.vf), ...urlsOf(box.vostfr)] : [];
+}
+
+// SwiftFlow : players{vf,vostfr} ou vf/vostfr à la racine, ou episodes{n:{vf,vostfr}}
+function parseSwiftflow(data, type, ep) {
+  const j = asJson(data);
+  if (!j) return null;
+  const grab = (o) => (o ? [...urlsOf(o.vf), ...urlsOf(o.vostfr)] : []);
+  const k = findKey(j.episodes, ep);
+  return [...grab(j.players), ...grab(j), ...grab(k && j.episodes[k])];
+}
+
+// IMDB : iframe_src, player_links[], series[].seasons[].episodes[].versions{}.players[]
+function parseImdb(data, ep, season) {
+  const j = asJson(data);
+  if (!j) return null;
+  const out = [];
+  if (j.iframe_src) out.push(j.iframe_src);
+  out.push(...urlsOf(j.player_links));
+  for (const serie of j.series || []) {
+    for (const se of serie.seasons || []) {
+      const sn = se.number != null ? se.number : se.season_number; // champ non garanti : ignoré s'il n'existe pas
+      if (sn != null && season != null && !sameEp(sn, season)) continue;
+      for (const epi of se.episodes || []) {
+        if (ep != null && !sameEp(epi.number, ep)) continue;
+        for (const v of Object.values(epi.versions || {})) out.push(...urlsOf(v.players));
+      }
+    }
+  }
+  return out;
+}
+
+// videolinks() du Kotlin : titre via cpasmal/tmdb → /search?title= → /films|series/download/... → m3u8/mp4 directs.
+async function movixDownload(API, HEADERS, kind, tmdb, s, e) {
+  const empty = { brand: 'DL', urls: [], direct: [] };
+  const get = (url) => axios.get(url, { headers: HEADERS, timeout: 8000 }).then((r) => r.data);
+  const q = kind === 'movie' ? '' : `?season=${s}&episode=${e}`;
+  const nameRe = /"(?:title|name)"\s*:\s*"([^"]+)"/;
+  const firstMatch = (re, text) => { const m = re.exec(text); return m ? m[1] : null; };
+  let title = null;
+  try {
+    const info = await get(kind === 'movie' ? `${API}/cpasmal/movie/${tmdb}` : `${API}/cpasmal/tv/${tmdb}/${s}/${e}`);
+    title = firstMatch(nameRe, txt(info));
+  } catch (_) { /* repli ci-dessous */ }
+  if (!title) {
+    try { title = firstMatch(nameRe, txt(await get(`${API}/tmdb/${kind}/${tmdb}${q}`))); } catch (_) { /* rien */ }
+  }
+  if (!title) return empty;
+
+  const found = txt(await get(`${API}/search?title=${encodeURIComponent(title)}`));
+  const id = firstMatch(/"id"\s*:\s*(\d+)/, found);
+  if (!id) return empty;
+
+  const dlUrl = kind === 'movie'
+    ? `${API}/films/download/${id}`
+    : `${API}/series/download/${id}/season/${s}/episode/${e}`;
+  const j = asJson(await get(dlUrl));
+  const direct = ((j && j.sources) || []).map((src) => {
+    const url = src.m3u8 || src.src;
+    if (!url) return null;
+    const quality = String(src.quality || '').replace(/\D/g, '');
+    const label = [src.language, quality && quality + 'p'].filter(Boolean).join(' · ') || 'Video';
+    return { url, title: label, headers: {} };
+  }).filter(Boolean);
+  return { brand: 'DL', urls: [], direct };
+}
+
+// Hôtes qu'on sait extraire : traités avant les autres pour ne pas dépasser la limite de 20 embeds.
+// (Voe change souvent de domaine miroir : simple heuristique.)
+const KNOWN = /voe|uqload|vidmoly|sendvid|sibnet|dood|d0o0d|ds2play|vidhide|filelions|lulu|veev|streamtape|mixdrop/i;
+const prioritize = (embeds) => [...embeds].sort((a, b) => Number(KNOWN.test(b.url)) - Number(KNOWN.test(a.url)));
 
 // Purstream : le Kotlin prend la DERNIÈRE source et utilise l'URL du flux comme Referer.
 function parsePurstream(data) {
@@ -144,10 +236,10 @@ async function streamFull(id, type) {
       let parsed;
       if (brand === 'Purstream') parsed = parsePurstream(res.data);
       else if (brand === 'J1F') parsed = parseJ1F(res.data);
-      else if (brand === 'FStream') parsed = pick(P.parseFstream(res.data, kind, e), extractUrls(res.data));
-      else if (brand === 'Wiflix') parsed = pick(P.parseWiflix(res.data, kind, e), extractUrls(res.data));
-      else if (brand === 'SwiftFlow') parsed = pick(P.parseSwiftflow(res.data, kind, e), extractUrls(res.data));
-      else if (brand === 'IMDB') parsed = pick(P.parseImdb(res.data, kind === 'movie' ? null : e, s), extractUrls(res.data));
+      else if (brand === 'FStream') parsed = pick(parseFstream(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'Wiflix') parsed = pick(parseWiflix(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'SwiftFlow') parsed = pick(parseSwiftflow(res.data, kind, e), extractUrls(res.data));
+      else if (brand === 'IMDB') parsed = pick(parseImdb(res.data, kind === 'movie' ? null : e, s), extractUrls(res.data));
       else parsed = { urls: extractUrls(res.data), direct: [] };
       console.log(`Movix ${brand}: HTTP ${res.status}, ${parsed.urls.length + parsed.direct.length} lien(s)`);
       return { brand, urls: parsed.urls, direct: parsed.direct };
@@ -158,9 +250,9 @@ async function streamFull(id, type) {
     }
   });
 
-  // Source "download" du Kotlin (videolinks) : recherche par titre puis m3u8/mp4 directs.
+  // Source "download" du Kotlin (videolinks).
   tasks.push(
-    P.movixDownload(API, HEADERS, kind, tmdb, s, e)
+    movixDownload(API, HEADERS, kind, tmdb, s, e)
       .then((r) => { console.log(`Movix DL: ${r.direct.length} lien(s)`); return r; })
       .catch((err) => {
         console.log(`Movix DL: ÉCHEC (${err.response ? 'HTTP ' + err.response.status : err.code || err.message})`);
@@ -196,8 +288,7 @@ async function streamFull(id, type) {
     }
   }
 
-  // Hôtes connus (Voe, Uqload, Vidmoly...) en premier pour qu'ils ne tombent pas au-delà de la limite de 20.
-  const ordered = P.prioritize(embeds);
+  const ordered = prioritize(embeds);
 
   // Tente d'extraire un lien vidéo de chaque page d'embed (en parallèle, limité pour rester rapide).
   const resolved = await Promise.all(
