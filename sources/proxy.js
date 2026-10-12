@@ -8,7 +8,7 @@ const SECRET = process.env.PROXY_SECRET || crypto.randomBytes(16).toString('hex'
 const PUBLIC = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 
 let active = 0;
-const MAX_ACTIVE = 6; // connexions vidéo simultanées max
+const MAX_ACTIVE = 12; // connexions vidéo simultanées max
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
 const unb64 = (s) => Buffer.from(s, 'base64url').toString();
