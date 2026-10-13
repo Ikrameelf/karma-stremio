@@ -96,6 +96,9 @@ async function meta(id) {
 }
 
 // ---------- Streams ----------
+async function stream(id) {
+  const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
+  if (parts[1] !== 'ep' || !parts[2]) return []; // id de série : pas de flux
 function directStream(url, label, headers) {
   return playable({
     name: 'YoTurkish',
