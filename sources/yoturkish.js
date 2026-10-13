@@ -96,9 +96,6 @@ async function meta(id) {
 }
 
 // ---------- Streams ----------
-async function stream(id) {
-  const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
-  if (parts[1] !== 'ep' || !parts[2]) return []; // id de série : pas de flux
 function directStream(url, label, headers) {
   return playable({
     name: 'YoTurkish',
@@ -156,6 +153,7 @@ async function collectWithBrowser(url) {
 
 async function stream(id) {
   const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
+  if (parts[1] !== 'ep' || !parts[2]) return []; // id de série : pas de flux
   const epUrl = BASE + dec(parts[2]);
   const seriesPath = parts[3] ? dec(parts[3]) : null;
   const epNum = parseInt(parts[4], 10) || null;
@@ -190,7 +188,7 @@ async function stream(id) {
   } catch (e) {
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
   }
-    try {
+  try {
     streams.push(...(await turkvost.findStreams(seriesPath, epNum)));
   } catch (e) {
     console.log('TurkVOST :', e.message);
