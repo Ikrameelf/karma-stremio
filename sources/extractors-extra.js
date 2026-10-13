@@ -1,11 +1,12 @@
 // Extracteurs supplémentaires, portés depuis Extractorlar.kt (plugin CloudStream Cs-Karma).
-// Non testés ici : à valider avec les logs Render.
 // resolveExtra(url, referer) renvoie [{ url, kind, headers }], ou null si l'hôte n'est pas géré / échoue
 // (dans ce cas extractors.js continue avec ses méthodes génériques).
+// Si l'hôte a fait un timeout, renvoie un tableau vide avec la propriété timedOut = true.
 const axios = require('axios');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
 const T = 9000;
+const T_FAST = 4500; // hôtes souvent lents (uqload, vidzy) : on n'attend pas plus longtemps
 
 const lastSegment = (url) => url.split('?')[0].split('/').filter(Boolean).pop();
 const asJson = (d) => (typeof d === 'string' ? JSON.parse(d) : d);
@@ -118,16 +119,16 @@ async function vidzy(url, referer) {
     .map((x) => x[1])
     .find((s) => s.includes('sources:') && s.includes('m3u8'));
   let script = null;
-  // La page peut être une page d'attente (« Chargement de la vidéo ») : un second essai après quelques secondes.
+  // La page peut être une page d'attente (« Chargement de la vidéo ») : un second essai après 1,5 s.
   for (let attempt = 1; attempt <= 2 && !script; attempt++) {
     const html = String((await axios.get(embed, {
-      timeout: T, responseType: 'text', headers: { 'User-Agent': UA, Referer: referer || `https://${host}/` },
+      timeout: T_FAST, responseType: 'text', headers: { 'User-Agent': UA, Referer: referer || `https://${host}/` },
     })).data);
     script = findScript(html);
     if (!script) {
       const title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] || '?';
       console.log(`  ↳ VIDZY : script du lecteur introuvable (essai ${attempt}/2, ${html.length} octets, titre « ${title.trim()} »)`);
-      if (attempt === 1) await new Promise((r) => setTimeout(r, 3000));
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 1500));
       else console.log(`  ↳ VIDZY EXTRAIT : ${html.replace(/\s+/g, ' ').slice(0, 800)}`);
     }
   }
@@ -148,15 +149,20 @@ async function vidzy(url, referer) {
   return [{ url: res, kind: 'HLS', headers: { Referer: `https://${host}/`, Origin: `https://${host}`, 'User-Agent': UA } }];
 }
 
-// ───────────── Vidaraa ─────────────
+// ───────────── Vidaraa / Vidara (vidara.to) ─────────────
 async function vidaraa(url) {
   const origin = new URL(url).origin;
   const r = await axios.post(origin + '/api/stream', { filecode: lastSegment(url), device: 'web' }, {
     timeout: T, headers: { Referer: url, Origin: origin, 'User-Agent': UA },
   });
-  const s = asJson(r.data) && asJson(r.data).streaming_url;
-  if (!s) return [];
-  return [{ url: s, kind: 'HLS', headers: { Referer: origin + '/', 'User-Agent': UA } }];
+  const d = asJson(r.data);
+  const s = d && d.streaming_url;
+  if (!s) {
+    console.log(`  ↳ VIDARA : pas de streaming_url (${JSON.stringify(d).slice(0, 200)})`);
+    return [];
+  }
+  console.log(`  ↳ VIDARA ${origin} : 1 lien décodé`);
+  return [{ url: s, kind: /\.m3u8/i.test(s) ? 'HLS' : 'MP4', headers: { Referer: origin + '/', 'User-Agent': UA } }];
 }
 
 // ───────────── GoodStream ─────────────
@@ -172,6 +178,21 @@ async function goodstream(url) {
   return [{ url: src, kind: 'HLS', headers: { Referer: origin + '/', Origin: origin, 'User-Agent': UA } }];
 }
 
+// ───────────── FireStream (diagnostic) ─────────────
+// La page contient <script id="video-data" type="application/json">{...}</script> en clair.
+// Pour l'instant on affiche seulement son contenu dans les logs : à partir de là on pourra écrire l'extracteur.
+async function firestream(url, referer) {
+  const r = await axios.get(url, {
+    timeout: T_FAST, responseType: 'text', maxContentLength: 3000000,
+    headers: { 'User-Agent': UA, Referer: referer || new URL(url).origin + '/' },
+  });
+  const html = String(r.data);
+  const m = html.match(/<script[^>]+id=["']video-data["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) { console.log('  ↳ FIRESTREAM : bloc video-data introuvable'); return null; }
+  console.log(`  ↳ FIRESTREAM video-data : ${m[1].replace(/\s+/g, ' ').slice(0, 1200)}`);
+  return null; // on laisse les méthodes génériques continuer
+}
+
 // ───────────── Uqload ─────────────
 // Même logique que le plugin : en-têtes Firefox + cookies de la page transmis au flux.
 async function uqload(url, referer) {
@@ -179,7 +200,7 @@ async function uqload(url, referer) {
   const origin = new URL(url).origin;
   const FF = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0';
   const r = await axios.get(url, {
-    timeout: T, responseType: 'text', maxContentLength: 3000000,
+    timeout: T_FAST, responseType: 'text', maxContentLength: 3000000,
     headers: {
       'User-Agent': FF,
       Referer: referer || origin + '/',
@@ -206,11 +227,19 @@ async function resolveExtra(url, referer) {
   try {
     if (/(^|\.)veev\./i.test(host)) return await veev(url);
     if (/(^|\.)vidzy\./i.test(host)) return await vidzy(url, referer);
-    if (/(^|\.)vidaraa\./i.test(host)) return await vidaraa(url);
+    if (/(^|\.)vidaraa?\./i.test(host)) return await vidaraa(url); // vidara.to ET vidaraa.*
     if (/(^|\.)goodstream\./i.test(host)) return await goodstream(url);
     if (/(^|\.)uqload\./i.test(host)) return await uqload(url, referer);
+    if (/(^|\.)firestream\./i.test(host)) return await firestream(url, referer);
   } catch (e) {
+    const timedOut = /ECONNABORTED|ETIMEDOUT/.test(e.code || '');
     console.log(`  ↳ extra ${host} : ÉCHEC ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+    if (timedOut) {
+      // Inutile de réessayer la même page avec la méthode générique : on signale le timeout.
+      const empty = [];
+      empty.timedOut = true;
+      return empty;
+    }
   }
   return null;
 }
