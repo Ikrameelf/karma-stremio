@@ -6,6 +6,7 @@ const { resolveEmbed } = require('./extractors');
 
 const BASE = 'https://coflix.wiki';
 const TMDB_KEY = process.env.TMDB_API_KEY || '';
+const EXTRACT_TIMEOUT = 8000; // avant : 18000 (Stremio abandonnait avant la fin)
 const UA =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36';
 
@@ -154,7 +155,7 @@ async function streamFull(id, type) {
             const host = new URL(link).hostname.replace(/^www\./, '');
             let links = [];
             try {
-              links = await withTimeout(resolveEmbed(link, BASE + '/'), 18000);
+              links = await withTimeout(resolveEmbed(link, BASE + '/'), EXTRACT_TIMEOUT);
             } catch (err) {
               console.error('[coflix] extraction échouée', host, err.message);
             }
