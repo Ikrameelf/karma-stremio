@@ -1,4 +1,5 @@
 // Flux TurkVOST (avec sous-titres) pour les épisodes YoTurkish.
+// Version diagnostic : chaque abandon est maintenant écrit dans les logs, et un échec réseau n'est plus mis en cache.
 const axios = require('axios');
 const { playable, proxyUrl } = require('./proxy');
 
@@ -17,21 +18,34 @@ const ALIASES = {};
 
 const slugCache = new Map();
 
-async function exists(url) {
-  try { await http.get(url, { responseType: 'text' }); return true; } catch { return false; }
+// Retourne 'yes' (page trouvée), 'no' (404 : la page n'existe pas) ou 'error' (autre problème : réseau, 403, 5xx...).
+async function check(url) {
+  try {
+    await http.get(url, { responseType: 'text' });
+    return 'yes';
+  } catch (e) {
+    if (e.response && e.response.status === 404) return 'no';
+    console.log(`TurkVOST ${url} : ${e.response ? 'HTTP ' + e.response.status + ' (serveur : ' + (e.response.headers['server'] || '?') + ')' : e.code || e.message}`);
+    return 'error';
+  }
 }
 
 async function findSlug(seriesPath) {
   const last = String(seriesPath || '').split('/').filter(Boolean).pop();
-  if (!last) return null;
+  if (!last) { console.log(`TurkVOST : chemin de série illisible (${seriesPath})`); return null; }
   const base = ALIASES[last] || slugify(last);
   if (slugCache.has(base)) return slugCache.get(base);
   const candidates = [...new Set([base, base.replace(/-(izle|vostfr|streaming)$/, '')])];
   let found = null;
+  let sawError = false;
   for (const c of candidates) {
-    if (await exists(`${BASE}/serie/${c}-vostfr`)) { found = c; break; }
+    const r = await check(`${BASE}/serie/${c}-vostfr`);
+    if (r === 'yes') { found = c; break; }
+    if (r === 'error') sawError = true;
   }
-  slugCache.set(base, found);
+  if (found) slugCache.set(base, found);
+  else if (!sawError) slugCache.set(base, null); // on ne mémorise l'absence que si le site a répondu 404
+  if (!found) console.log(`TurkVOST : série introuvable pour « ${last} » (essais : ${candidates.join(', ')})${sawError ? ' — erreur réseau, pas de mise en cache' : ''}`);
   return found;
 }
 
@@ -76,7 +90,7 @@ function parseSubtitles(html) {
 }
 
 async function findStreams(seriesPath, epNum) {
-  if (!seriesPath || !epNum) return [];
+  if (!seriesPath || !epNum) { console.log(`TurkVOST : série ou numéro d'épisode manquant (${seriesPath}, ${epNum})`); return []; }
   const slug = await findSlug(seriesPath);
   if (!slug) return [];
   const epUrl = `${BASE}/serie/${slug}/episode-${epNum}-vostfr`;
@@ -85,13 +99,17 @@ async function findStreams(seriesPath, epNum) {
   catch (e) { console.log(`TurkVOST ${epUrl} : ${e.response ? 'HTTP ' + e.response.status : e.message}`); return []; }
 
   const m = html.match(MP4_RE);
-  if (!m) { console.log(`TurkVOST ${epUrl} : aucun MP4 trouvé`); return []; }
+  if (!m) {
+    const wall = /ACC[ÈE]S VIP|CONNEXION REQUISE/i.test(html);
+    console.log(`TurkVOST ${epUrl} : aucun MP4 trouvé${wall ? ' (la page affiche un mur VIP / connexion)' : ''}`);
+    return [];
+  }
   const url = m[0].replace(/&amp;/g, '&');
   try {
     const head = await http.head(url, { headers: HEADERS });
     const mb = Number(head.headers['content-length']) / 1048576;
     console.log(`TurkVOST taille : ${mb.toFixed(0)} Mo`);
-  } catch (e) { console.log('TurkVOST taille indisponible :', e.message); }
+  } catch (e) { console.log('TurkVOST taille indisponible :', e.response ? 'HTTP ' + e.response.status : e.message); }
 
   const stream = playable({ name: 'TurkVOST', title: 'TurkVOST VOSTFR (MP4)', url, headers: HEADERS });
   const subtitles = parseSubtitles(html);
