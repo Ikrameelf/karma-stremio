@@ -89,6 +89,12 @@ function collectStreams(type, id) {
 }
 
 builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
+builder.defineSubtitlesHandler(async ({ type, id }) => {
+  console.log('subtitles demandés', id);
+  try {
+    ...
+    console.log('subtitles trouvés', subtitles.length);
+    return { subtitles };
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   try {
