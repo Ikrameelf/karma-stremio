@@ -1,3 +1,6 @@
+
+
+
 // Un flux vidéo interrompu (téléphone qui ferme la lecture, serveur distant coupé) ne doit jamais faire tomber l'addon.
 process.on('uncaughtException', (e) => console.error('uncaughtException', e && e.stack));
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e && e.stack ? e.stack : e));
@@ -21,14 +24,15 @@ const withMeta = sources.filter((s) => s.meta);
 
 const manifest = {
   id: 'community.karma.stremio',
-  version: '1.2.0',
+  version: '1.3.0',
   name: 'Karma',
   description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix).',
   types: ['movie', 'series'],
-  resources: [
+    resources: [
     'catalog',
     { name: 'meta', types: ['series'], idPrefixes: withMeta.map((s) => s.prefix) },
     { name: 'stream', types: ['movie', 'series'], idPrefixes: [...new Set(sources.map((s) => s.prefix))] },
+    { name: 'subtitles', types: ['movie', 'series'], idPrefixes: [...new Set(sources.map((s) => s.prefix))] },
   ],
   catalogs: withCatalog.map((s) => ({
     type: s.types[0],
@@ -56,25 +60,56 @@ builder.defineMetaHandler(async ({ id }) => {
 });
 
 // Appelle toutes les sources dont le préfixe correspond à l'ID et fusionne leurs flux.
-builder.defineStreamHandler(async ({ type, id }) => {
-  const list = sources.filter((s) => id.startsWith(s.prefix));
-  const results = await Promise.allSettled(
-    list.map((s) =>
-      Promise.race([
-        s.stream(id, type),
-        new Promise((ok) => setTimeout(() => ok([]), 25000)), // une source lente ne bloque pas les autres
-      ])
-    )
-  );
-  const streams = [];
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled') streams.push(...(r.value || []));
-    else console.error('stream', list[i].prefix, r.reason && r.reason.message);
-  });
-  return { streams };
-});
 
-const app = express();
+const streamCache = new Map(); // id -> { at, p }
+function collectStreams(type, id) {
+  const hit = streamCache.get(id);
+  if (hit && Date.now() - hit.at < 120000) return hit.p;
+  if (streamCache.size > 200) streamCache.clear();
+  const p = (async () => {
+    const list = sources.filter((s) => id.startsWith(s.prefix));
+    const results = await Promise.allSettled(
+      list.map((s) =>
+        Promise.race([
+          s.stream(id, type),
+          new Promise((ok) => setTimeout(() => ok([]), 25000)),
+        ])
+      )
+    );
+    const streams = [];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') streams.push(...(r.value || []));
+      else console.error('stream', list[i].prefix, r.reason && r.reason.message);
+    });
+    return streams;
+  })();
+  streamCache.set(id, { at: Date.now(), p });
+  p.catch(() => streamCache.delete(id));
+  return p;
+}
+
+builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
+
+builder.defineSubtitlesHandler(async ({ type, id }) => {
+  try {
+    const streams = await collectStreams(type, id);
+    const seen = new Set();
+    const subtitles = [];
+    streams.forEach((s) => (s.subtitles || []).forEach((sub) => {
+      if (!sub || !sub.url || seen.has(sub.url)) return;
+      seen.add(sub.url);
+      subtitles.push({
+        id: String(sub.id || `karma-${subtitles.length}`),
+        url: sub.url,
+        lang: !sub.lang || sub.lang === 'fr' ? 'fre' : sub.lang,
+      });
+    }));
+    return { subtitles };
+  } catch (e) {
+    console.error('subtitles', e.message);
+    return { subtitles: [] };
+  }
+});
 
 // Route temporaire : /dbg?u=<url coflix>&q=<regex>&m=POST affiche le code d'une page (ou les passages qui correspondent).
 app.get('/dbg', async (req, res) => {
