@@ -1,6 +1,3 @@
-
-
-
 // Un flux vidéo interrompu (téléphone qui ferme la lecture, serveur distant coupé) ne doit jamais faire tomber l'addon.
 process.on('uncaughtException', (e) => console.error('uncaughtException', e && e.stack));
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e && e.stack ? e.stack : e));
@@ -21,6 +18,7 @@ const sources = [
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
+const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio',
@@ -28,11 +26,11 @@ const manifest = {
   name: 'Karma',
   description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix).',
   types: ['movie', 'series'],
-    resources: [
+  resources: [
     'catalog',
     { name: 'meta', types: ['series'], idPrefixes: withMeta.map((s) => s.prefix) },
-    { name: 'stream', types: ['movie', 'series'], idPrefixes: [...new Set(sources.map((s) => s.prefix))] },
-    { name: 'subtitles', types: ['movie', 'series'], idPrefixes: [...new Set(sources.map((s) => s.prefix))] },
+    { name: 'stream', types: ['movie', 'series'], idPrefixes: allPrefixes },
+    { name: 'subtitles', types: ['movie', 'series'], idPrefixes: allPrefixes },
   ],
   catalogs: withCatalog.map((s) => ({
     type: s.types[0],
@@ -60,7 +58,7 @@ builder.defineMetaHandler(async ({ id }) => {
 });
 
 // Appelle toutes les sources dont le préfixe correspond à l'ID et fusionne leurs flux.
-
+// Le résultat est gardé 2 minutes : Nuvio demande flux et sous-titres presque en même temps.
 const streamCache = new Map(); // id -> { at, p }
 function collectStreams(type, id) {
   const hit = streamCache.get(id);
@@ -72,7 +70,7 @@ function collectStreams(type, id) {
       list.map((s) =>
         Promise.race([
           s.stream(id, type),
-          new Promise((ok) => setTimeout(() => ok([]), 25000)),
+          new Promise((ok) => setTimeout(() => ok([]), 25000)), // une source lente ne bloque pas les autres
         ])
       )
     );
@@ -89,6 +87,8 @@ function collectStreams(type, id) {
 }
 
 builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
+
+// Sous-titres : on reprend ceux que les sources attachent à leurs flux (champ "subtitles").
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log('subtitles demandés', id);
   try {
@@ -111,7 +111,9 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
     return { subtitles: [] };
   }
 });
+
 const app = express();
+
 // Route temporaire : /dbg?u=<url coflix>&q=<regex>&m=POST affiche le code d'une page (ou les passages qui correspondent).
 app.get('/dbg', async (req, res) => {
   try {
