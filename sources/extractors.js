@@ -1,3 +1,5 @@
+
+
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
@@ -265,7 +267,8 @@ async function resolveEmbed(url, referer, depth = 2) {
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
     // flixeo répond 429 quand on l'appelle en rafale : une requête à la fois, avec pause et nouvel essai.
-    const { data } = /flixeo\./i.test(hostKey) ? await limited('flixeo', pageReq) : await pageReq();
+    const lim = /flixeo\./i.test(hostKey) ? 'flixeo' : /listeamed\./i.test(hostKey) ? 'listeamed' : null;
+const { data } = lim ? await limited(lim, pageReq) : await pageReq();
     const html = typeof data === 'string' ? data : JSON.stringify(data);
 
     // Voe en premier : la page contient un <script type="application/json"> obfusqué, et peut aussi contenir de faux ".mp4".
