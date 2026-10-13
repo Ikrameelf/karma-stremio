@@ -6,11 +6,17 @@ const { resolveExtra } = require('./extractors-extra');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const VIDEO = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
 const NOISE = /\.(jpe?g|png|webp|gif|svg|vtt|srt)(\?|$)/i;
+const PAGE_TIMEOUT = 6000; // avant : 9000
 
-// Disjoncteur par hôte : un hôte qui time-out ou renvoie 403 est ignoré pendant 5 min (évite de perdre 9 s à chaque essai).
+// Disjoncteur par hôte : un hôte qui time-out est ignoré pendant 60 s (avant : 5 min, et aussi sur 403).
+// Un 403 peut venir d'un seul lien : il ne bloque plus tout l'hôte.
 const deadHosts = new Map();
-const isDead = (h) => (deadHosts.get(h) || 0) > Date.now();
-const markDead = (h) => deadHosts.set(h, Date.now() + 5 * 60 * 1000);
+const isDead = (h) => {
+  const dead = (deadHosts.get(h) || 0) > Date.now();
+  if (dead) console.log(`  ↳ ${h} ignoré (disjoncteur actif)`);
+  return dead;
+};
+const markDead = (h) => deadHosts.set(h, Date.now() + 60 * 1000);
 
 // Décompresse le format eval(function(p,a,c,k,e,d){...}) (Dean Edwards packer), très courant sur les hébergeurs.
 function unpackAll(src) {
@@ -86,7 +92,7 @@ async function tryXfs(url, html, referer) {
   const results = await Promise.all(tries.map(async (t) => {
     try {
       const { data } = await axios.get(t, {
-        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
+        timeout: PAGE_TIMEOUT, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: referer || u.origin + '/' },
       });
       const h = String(data);
@@ -119,7 +125,7 @@ async function xfsDownload(html, pageUrl) {
     try {
       const origin = new URL(dl).origin;
       const page = await axios.get(dl, {
-        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
+        timeout: PAGE_TIMEOUT, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: pageUrl },
       });
       const h = String(page.data);
@@ -181,7 +187,8 @@ function voeDecode(payload, luts) {
 async function tryVoe(html, pageUrl, referer, depth = 1) {
   const h = String(html);
   const script = h.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (script) {
+  // Le payload Voe est un tableau ou une chaîne JSON : un objet {...} (ex. FireStream) n'est pas du Voe.
+  if (script && /^\s*[\["]/.test(script[1])) {
     try {
       let payload = JSON.parse(script[1].trim());
       if (Array.isArray(payload)) payload = payload[0];
@@ -203,7 +210,7 @@ async function tryVoe(html, pageUrl, referer, depth = 1) {
     try {
       const next = new URL(redirect[1], pageUrl).href;
       const { data } = await axios.get(next, {
-        timeout: 9000, maxContentLength: 1500000, responseType: 'text',
+        timeout: PAGE_TIMEOUT, maxContentLength: 1500000, responseType: 'text',
         headers: { 'User-Agent': UA, Referer: referer || pageUrl },
       });
       return tryVoe(typeof data === 'string' ? data : JSON.stringify(data), next, referer, depth - 1);
@@ -246,8 +253,13 @@ async function resolveEmbed(url, referer, depth = 2) {
     if (DOOD.test(hostKey)) return await resolveDood(url);
     const extra = await resolveExtra(url, referer);
     if (extra && extra.length) return extra;
+    if (extra && extra.timedOut) {
+      // L'extracteur dédié a fait un timeout : inutile de refaire la même requête en mode générique.
+      markDead(hostKey);
+      return [];
+    }
     const pageReq = () => axios.get(url, {
-      timeout: 9000,
+      timeout: PAGE_TIMEOUT,
       maxContentLength: 1500000,
       responseType: 'text',
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
@@ -284,7 +296,7 @@ async function resolveEmbed(url, referer, depth = 2) {
     }
     if (!found.length) {
       console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
-      console.log(`  ↳ URL : ${url}`);
+      console.log(`  ↳ URL : ${url.replace(/api_key=[^&]+/i, 'api_key=***')}`);
       // Diagnostic : repère où la page cache son lecteur (à retirer une fois le problème réglé).
       for (const kw of ['application/json', 'm3u8', 'sources', 'atob(', 'eval(']) {
         const i = html.indexOf(kw);
@@ -304,7 +316,8 @@ async function resolveEmbed(url, referer, depth = 2) {
       ? `HTTP ${err.response.status} (serveur : ${err.response.headers['server'] || '?'})`
       : err.code || err.message;
     console.log(`  ↳ ${origin} : ÉCHEC ${why}`);
-    if (/ECONNABORTED|ETIMEDOUT/.test(err.code || '') || (err.response && err.response.status === 403)) markDead(hostKey);
+    // Seuls les timeouts arment le disjoncteur (60 s). Un 403 ne bloque plus tout l'hôte.
+    if (/ECONNABORTED|ETIMEDOUT/.test(err.code || '')) markDead(hostKey);
     return [];
   }
 }
