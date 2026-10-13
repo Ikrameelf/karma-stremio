@@ -110,7 +110,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
     return { subtitles: [] };
   }
 });
-
+const app = express();
 // Route temporaire : /dbg?u=<url coflix>&q=<regex>&m=POST affiche le code d'une page (ou les passages qui correspondent).
 app.get('/dbg', async (req, res) => {
   try {
