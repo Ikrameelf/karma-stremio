@@ -2,6 +2,9 @@
 
 
 
+
+
+
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
@@ -213,15 +216,24 @@ async function tryVoe(html, pageUrl, referer, depth = 1) {
   return [];
 }
 
-// Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
+const AD_HOSTS = /ch=Ads|AdsDeli|northwavepoint|doubleclick|googlesyndication|adsterra|popads|popcash|propeller/i;
+
 function nextHop(html, pageUrl) {
   const h = String(html);
-  const m = h.match(/window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/)
-    || h.match(/location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)/)
-    || h.match(/<iframe[^>]+src=["']([^"']+)["']/i)
-    || h.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+url=([^"'>\s]+)/i);
-  if (!m) return null;
-  try { return new URL(m[1].replace(/&amp;/g, '&'), pageUrl).href; } catch { return null; }
+  const candidates = [
+    h.match(/window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/),
+    h.match(/location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)/),
+    ...h.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
+    h.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+url=([^"'>\s]+)/i),
+  ].filter(Boolean);
+
+  const urls = [];
+  for (const m of candidates) {
+    try { urls.push(new URL(m[1].replace(/&amp;/g, '&'), pageUrl).href); } catch (_) { /* URL invalide */ }
+  }
+  const good = urls.find((u) => !AD_HOSTS.test(u));
+  if (!good && urls.length) console.log(`  ↳ nextHop : seulement des pubs ignorées (${urls.length}) sur ${pageUrl.slice(0, 100)}`);
+  return good || null;
 }
 
 async function resolveEmbed(url, referer, depth = 2) {
