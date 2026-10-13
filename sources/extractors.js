@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 // Extracteurs génériques pour les pages d'embed (Uqload, Vidmoly, Sendvid, Sibnet, Voe, etc.).
 // Principe : télécharger la page, décompresser le JS "packed" éventuel, puis chercher les liens .m3u8/.mp4.
 const axios = require('axios');
@@ -13,6 +6,11 @@ const { resolveExtra } = require('./extractors-extra');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const VIDEO = /\.(m3u8|mp4|mkv|webm)(\?|$)/i;
 const NOISE = /\.(jpe?g|png|webp|gif|svg|vtt|srt)(\?|$)/i;
+
+// Disjoncteur par hôte : un hôte qui time-out ou renvoie 403 est ignoré pendant 5 min (évite de perdre 9 s à chaque essai).
+const deadHosts = new Map();
+const isDead = (h) => (deadHosts.get(h) || 0) > Date.now();
+const markDead = (h) => deadHosts.set(h, Date.now() + 5 * 60 * 1000);
 
 // Décompresse le format eval(function(p,a,c,k,e,d){...}) (Dean Edwards packer), très courant sur les hébergeurs.
 function unpackAll(src) {
@@ -216,6 +214,8 @@ async function tryVoe(html, pageUrl, referer, depth = 1) {
   return [];
 }
 
+// Page suivante à suivre (redirection JS, iframe, meta refresh) en ignorant les iframes publicitaires.
+// Les wrappers flixeo (voe3/voe4/viper) contiennent une iframe pub (AdsDeli) avant le vrai lecteur.
 const AD_HOSTS = /ch=Ads|AdsDeli|northwavepoint|doubleclick|googlesyndication|adsterra|popads|popcash|propeller/i;
 
 function nextHop(html, pageUrl) {
@@ -236,13 +236,16 @@ function nextHop(html, pageUrl) {
   return good || null;
 }
 
+// Retourne [{ url, kind, headers }] (liste vide si rien n'est trouvé).
 async function resolveEmbed(url, referer, depth = 2) {
   let origin;
   try { origin = new URL(url).origin; } catch { return []; }
+  const hostKey = new URL(url).hostname;
+  if (isDead(hostKey)) return [];
   try {
-    if (DOOD.test(new URL(url).hostname)) return await resolveDood(url);
-const extra = await resolveExtra(url, referer);
-if (extra && extra.length) return extra;
+    if (DOOD.test(hostKey)) return await resolveDood(url);
+    const extra = await resolveExtra(url, referer);
+    if (extra && extra.length) return extra;
     const pageReq = () => axios.get(url, {
       timeout: 9000,
       maxContentLength: 1500000,
@@ -250,19 +253,21 @@ if (extra && extra.length) return extra;
       headers: { 'User-Agent': UA, Referer: referer || origin + '/' },
     });
     // flixeo répond 429 quand on l'appelle en rafale : une requête à la fois, avec pause et nouvel essai.
-    const host = new URL(url).hostname;
-    const { data } = /flixeo\./i.test(host) ? await limited('flixeo', pageReq) : await pageReq();
+    const { data } = /flixeo\./i.test(hostKey) ? await limited('flixeo', pageReq) : await pageReq();
     const html = typeof data === 'string' ? data : JSON.stringify(data);
+
+    // Voe en premier : la page contient un <script type="application/json"> obfusqué, et peut aussi contenir de faux ".mp4".
+    if (/<script[^>]+type=["']application\/json["']/i.test(html)) {
+      const viaVoeFirst = await tryVoe(html, url, referer);
+      if (viaVoeFirst.length) return viaVoeFirst;
+    }
+
     const found = candidates(html + '\n' + unpackAll(html), url);
     if (!found.length && depth > 0) {
       const next = nextHop(html, url);
       if (next && next !== url) {
         console.log(`  ↳ suite : ${next.slice(0, 120)}`);
         return resolveEmbed(next, url, depth - 1);
-        if (/<script[^>]+type=["']application\/json["']/i.test(html)) {
-  const viaVoe = await tryVoe(html, url, referer);
-  if (viaVoe.length) return viaVoe;
-}
       }
     }
     if (!found.length && /\/pass_md5\//.test(html)) {
@@ -280,6 +285,11 @@ if (extra && extra.length) return extra;
     if (!found.length) {
       console.log(`  ↳ ${origin} : page lue (${html.length} octets) mais aucun lien vidéo trouvé`);
       console.log(`  ↳ URL : ${url}`);
+      // Diagnostic : repère où la page cache son lecteur (à retirer une fois le problème réglé).
+      for (const kw of ['application/json', 'm3u8', 'sources', 'atob(', 'eval(']) {
+        const i = html.indexOf(kw);
+        if (i >= 0) console.log(`  ↳ MOT-CLÉ ${kw} @${i} : ${html.slice(Math.max(0, i - 150), i + 350).replace(/\s+/g, ' ')}`);
+      }
       console.log(`  ↳ EXTRAIT : ${html.replace(/\s+/g, ' ').slice(0, 2500)}`);
     }
     return found
@@ -294,9 +304,9 @@ if (extra && extra.length) return extra;
       ? `HTTP ${err.response.status} (serveur : ${err.response.headers['server'] || '?'})`
       : err.code || err.message;
     console.log(`  ↳ ${origin} : ÉCHEC ${why}`);
+    if (/ECONNABORTED|ETIMEDOUT/.test(err.code || '') || (err.response && err.response.status === 403)) markDead(hostKey);
     return [];
   }
 }
 
 module.exports = { resolveEmbed, unpackAll };
-
