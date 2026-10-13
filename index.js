@@ -92,12 +92,6 @@ builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStr
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log('subtitles demandés', id);
   try {
-    ...
-    console.log('subtitles trouvés', subtitles.length);
-    return { subtitles };
-
-builder.defineSubtitlesHandler(async ({ type, id }) => {
-  try {
     const streams = await collectStreams(type, id);
     const seen = new Set();
     const subtitles = [];
@@ -110,6 +104,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
         lang: !sub.lang || sub.lang === 'fr' ? 'fre' : sub.lang,
       });
     }));
+    console.log('subtitles trouvés', subtitles.length);
     return { subtitles };
   } catch (e) {
     console.error('subtitles', e.message);
