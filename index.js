@@ -62,32 +62,95 @@ builder.defineMetaHandler(async ({ id }) => {
 
 // Appelle toutes les sources dont le préfixe correspond à l'ID et fusionne leurs flux.
 // Le résultat est gardé 2 minutes : Nuvio demande flux et sous-titres presque en même temps.
-const streamCache = new Map(); // id -> { at, p }
+
+const streamCache = new Map();
+
 function collectStreams(type, id) {
-  const hit = streamCache.get(id);
-  if (hit && Date.now() - hit.at < 120000) return hit.p;
-  if (streamCache.size > 200) streamCache.clear();
+  const key = `${type}:${id}`;
+  const now = Date.now();
+  const hit = streamCache.get(key);
+
+  if (hit && now - hit.at < hit.ttl) {
+    return hit.p;
+  }
+
+  if (hit) streamCache.delete(key);
+
   const p = (async () => {
     const list = sources.filter((s) => id.startsWith(s.prefix));
+
     const results = await Promise.allSettled(
-      list.map((s) =>
-        Promise.race([
-          s.stream(id, type),
-          new Promise((ok) => setTimeout(() => ok([]), 25000)), // une source lente ne bloque pas les autres
-        ])
-      )
+      list.map(async (s) => {
+        let timer;
+
+        try {
+          return await Promise.race([
+            Promise.resolve().then(() => s.stream(id, type)),
+            new Promise((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('Délai dépassé après 25 s')),
+                25000
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      })
     );
+
     const streams = [];
+
     results.forEach((r, i) => {
-      if (r.status === 'fulfilled') streams.push(...(r.value || []));
-      else console.error('stream', list[i].prefix, r.reason && r.reason.message);
+      if (r.status === 'fulfilled') {
+        streams.push(...(Array.isArray(r.value) ? r.value : []));
+      } else {
+        console.error(
+          '[STREAM]',
+          list[i].prefix,
+          r.reason?.message || r.reason
+        );
+      }
     });
+
+    console.log(
+      '[STREAM]',
+      id,
+      `sources=${list.length}`,
+      `flux=${streams.length}`
+    );
+
     return streams;
   })();
-  streamCache.set(id, { at: Date.now(), p });
-  p.catch(() => streamCache.delete(id));
+
+  // Cache partagé pendant la requête en cours.
+  const entry = { at: now, ttl: 5000, p };
+  streamCache.set(key, entry);
+
+  p.then(
+    (streams) => {
+      // Ne pas écraser une entrée créée par une requête plus récente.
+      if (streamCache.get(key) !== entry) return;
+
+      entry.at = Date.now();
+      entry.ttl = streams.length > 0 ? 30000 : 5000;
+    },
+    () => {
+      if (streamCache.get(key) === entry) {
+        streamCache.delete(key);
+      }
+    }
+  );
+
+  if (streamCache.size > 200) {
+    for (const [k, v] of streamCache) {
+      if (Date.now() - v.at > v.ttl) streamCache.delete(k);
+    }
+  }
+
   return p;
 }
+
 
 builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
 
