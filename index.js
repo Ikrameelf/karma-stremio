@@ -91,29 +91,47 @@ builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStr
 
 // Sous-titres : on reprend ceux que les sources attachent à leurs flux (champ "subtitles").
 builder.defineSubtitlesHandler(async ({ type, id }) => {
-  console.log('subtitles demandés', id);
+  console.log('[SUBTITLES] Requête reçue :', { type, id });
+
   try {
     const streams = await collectStreams(type, id);
+
+    console.log('[SUBTITLES] Flux récupérés :', streams.length);
+
     const seen = new Set();
     const subtitles = [];
-    streams.forEach((s) => (s.subtitles || []).forEach((sub) => {
-      if (!sub || !sub.url || seen.has(sub.url)) return;
-      seen.add(sub.url);
-      subtitles.push({
-        id: String(sub.id || `karma-${subtitles.length}`),
-        url: sub.url,
-        lang: !sub.lang || sub.lang === 'fr' ? 'fre' : sub.lang,
+
+    streams.forEach((stream, index) => {
+      console.log('[SUBTITLES] Flux', index, {
+        name: stream.name,
+        title: stream.title,
+        ytId: stream.ytId,
+        subtitleCount: (stream.subtitles || []).length
       });
-    }));
-    console.log('subtitles trouvés', subtitles.length);
+
+      (stream.subtitles || []).forEach((sub) => {
+        if (!sub?.url || seen.has(sub.url)) return;
+
+        seen.add(sub.url);
+
+        subtitles.push({
+          id: String(sub.id || `karma-${subtitles.length}`),
+          url: sub.url,
+          lang: !sub.lang || sub.lang === 'fr'
+            ? 'fre'
+            : sub.lang
+        });
+      });
+    });
+
+    console.log('[SUBTITLES] Résultat :', subtitles.length);
+
     return { subtitles };
   } catch (e) {
-    console.error('subtitles', e.message);
+    console.error('[SUBTITLES] Erreur :', e.stack || e);
     return { subtitles: [] };
   }
 });
-
-const app = express();
 
 // Route temporaire : /dbg?u=<url coflix>&q=<regex>&m=POST affiche le code d'une page (ou les passages qui correspondent).
 app.get('/dbg', async (req, res) => {
