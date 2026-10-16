@@ -310,6 +310,37 @@ playlist: body.split(/\r?\n/).map(line => {
 
   res.json({ results });
 });
+
+app.get('/debug/vidzy-js', async (req, res) => {
+  try {
+    const url = 'https://vidzy.cc/embed-a0qnn6zw23a7.html';
+    const r = await axios.get(url, {
+      timeout: 12000,
+      responseType: 'text',
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 Chrome/124.0 Safari/537.36',
+        'Referer': 'https://vidzy.org/movie/35',
+      },
+    });
+
+    const html = String(r.data);
+    const scripts = [...html.matchAll(
+      /<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi
+    )].map(m => m[1]).slice(0, 30);
+
+    res.json({
+      status: r.status,
+      scripts,
+      inlineHints: html.split(/\r?\n/).filter(line =>
+        /master\.m3u8|\.m3u8|jwplayer|videojs|sources\s*:|file\s*:/i.test(line)
+      ).slice(0, 50),
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
 const fs = require('./sources/frenchstream');
