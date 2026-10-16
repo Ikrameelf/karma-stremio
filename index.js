@@ -287,8 +287,17 @@ app.get('/debug/vidzy-hls', async (req, res) => {
         host: new URL(url).host,
         status: r.status,
         contentType: r.headers['content-type'] || null,
-        playlistHLS: body.trimStart().startsWith('#EXTM3U'),
-        longueur: body.length,
+playlistHLS: body.trimStart().startsWith('#EXTM3U'),
+longueur: body.length,
+playlist: body.split(/\r?\n/).map(line => {
+  if (/^https?:\/\//i.test(line)) {
+    try {
+      const u = new URL(line);
+      return u.origin + u.pathname;
+    } catch {}
+  }
+  return line;
+}),
       };
     } catch (e) {
       return {
