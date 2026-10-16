@@ -261,6 +261,45 @@ app.get('/debug/vidzy-embed', async (req, res) => {
     res.status(502).json({ error: e.code || e.message });
   }
 });
+app.get('/debug/vidzy-hls', async (req, res) => {
+  const urls = [
+    'https://s1.fsvid.lol/troll/master.m3u8',
+    'https://v6.vidzy.cc/troll/master.m3u8',
+  ];
+
+  const results = await Promise.all(urls.map(async (url) => {
+    try {
+      const r = await axios.get(url, {
+        timeout: 10000,
+        maxRedirects: 5,
+        responseType: 'text',
+        validateStatus: () => true,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+          'Referer': 'https://vidzy.cc/',
+        },
+      });
+
+      const body = String(r.data);
+
+      return {
+        host: new URL(url).host,
+        status: r.status,
+        contentType: r.headers['content-type'] || null,
+        playlistHLS: body.trimStart().startsWith('#EXTM3U'),
+        longueur: body.length,
+      };
+    } catch (e) {
+      return {
+        host: new URL(url).host,
+        erreur: e.code || e.message,
+      };
+    }
+  }));
+
+  res.json({ results });
+});
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
 const fs = require('./sources/frenchstream');
