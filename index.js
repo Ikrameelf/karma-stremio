@@ -7,6 +7,8 @@ const axios = require('axios');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const proxy = require('./sources/proxy');
 
+const app = express();
+
 // Chaque source exporte { prefix, types, stream } et, en option, { catalogId, catalogName, genres, catalog, meta }.
 // Plusieurs sources peuvent partager le même préfixe (Movix et Coflix : IDs IMDb « tt ») : leurs flux sont fusionnés.
 const sources = [
