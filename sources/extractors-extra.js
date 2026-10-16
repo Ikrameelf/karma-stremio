@@ -74,6 +74,8 @@ async function resolveVidzy(url, referer) {
 // resolveExtra(url, referer) renvoie [{ url, kind, headers }], ou null si l'hôte n'est pas géré / échoue
 // (dans ce cas extractors.js continue avec ses méthodes génériques).
 // Si l'hôte a fait un timeout, renvoie un tableau vide avec la propriété timedOut = true.
+const vidzy = await resolveVidzy(url, referer);
+if (vidzy !== null) return vidzy;
 const axios = require('axios');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
