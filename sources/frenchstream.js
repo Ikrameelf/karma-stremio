@@ -1,5 +1,5 @@
 // sources/frenchstream.js
-const BASE = 'https://french-stream.net';
+const BASE = 'https://www.thefrenchstream.com';
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36';
 const H = { 'user-agent': UA, referer: BASE + '/' };
 
