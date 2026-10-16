@@ -220,6 +220,47 @@ app.get('/debug/vidzy', async (req, res) => {
     });
   }
 });
+app.get('/debug/vidzy-embed', async (req, res) => {
+  const url = 'https://vidzy.cc/embed-a0qnn6zw23a7.html';
+
+  try {
+    const r = await axios.get(url, {
+      timeout: 12000,
+      maxRedirects: 5,
+      responseType: 'text',
+      validateStatus: () => true,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+        'Referer': 'https://vidzy.org/movie/35',
+      },
+    });
+
+    const html = String(r.data);
+    const patterns = [
+      /<video\b[^>]*>/gi,
+      /<source\b[^>]*>/gi,
+      /<iframe\b[^>]*>/gi,
+      /https?:[^"'\\\s<>]+\.m3u8[^"'\\\s<>]*/gi,
+      /https?:[^"'\\\s<>]+\.mp4[^"'\\\s<>]*/gi,
+    ];
+
+    const indices = {};
+    for (const pattern of patterns) {
+      indices[pattern.source] =
+        [...new Set(html.match(pattern) || [])].slice(0, 10);
+    }
+
+    res.json({
+      status: r.status,
+      contentType: r.headers['content-type'] || null,
+      htmlLength: html.length,
+      indices,
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.code || e.message });
+  }
+});
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
 const fs = require('./sources/frenchstream');
