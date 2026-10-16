@@ -1,4 +1,4 @@
-
+// Extracteurs supplémentaires pour Karma.
 const axios = require('axios');
 
 const UA =
@@ -114,7 +114,7 @@ async function veev(url) {
   const mediaId = lastSegment(finalUrl);
 
   const re =
-    /[.\s'](?:fc|_vvto\[[^\]]*)(?:['\]]*)?\s*[:=]\s*['"]([^'"]+)/g;
+    /[\.\s'](?:fc|_vvto\[[^\]]*)(?:['\]]*)?\s*[:=]\s*['"]([^'"]+)/g;
 
   const encodedValues = [...html.matchAll(re)].map((m) => m[1]);
   let ch = null;
@@ -187,7 +187,7 @@ async function veev(url) {
 // ───────────── Vidzy ─────────────
 
 async function vidzy(url, referer) {
-  const match = String(url).match(
+  const match = url.match(
     /(?:\/d\/|\/download\/|\/file\/|\/f\/|\/v\/|\/embed-)([a-z0-9]+)/i
   );
 
@@ -196,11 +196,17 @@ async function vidzy(url, referer) {
   const host = 'vidzy.cc';
   const embedUrl = `https://${host}/embed-${match[1]}.html`;
 
-  try {
+  const findScript = (html) =>
+    [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
+      .map((item) => item[1])
+      .find((script) => script.includes('sources:') && script.includes('m3u8'));
+
+  let script = null;
+
+  for (let attempt = 1; attempt <= 2 && !script; attempt++) {
     const response = await axios.get(embedUrl, {
       timeout: T_FAST,
       responseType: 'text',
-      maxContentLength: 3000000,
       headers: {
         'User-Agent': UA,
         Referer: referer || `https://${host}/`,
@@ -208,79 +214,61 @@ async function vidzy(url, referer) {
     });
 
     const html = String(response.data);
+    script = findScript(html);
 
-    // Le lecteur actuel utilise une variable E, et non l'ancien
-    // motif de décodage recherché par la version précédente.
-    const encoded = (
-      html.match(/\bvar\s+E\s*=\s*["']([A-Za-z0-9+/=]+)["']/) || []
-    )[1];
-
-    if (!encoded) {
+    if (!script) {
       const title =
         (html.match(/<title>([^<]*)<\/title>/i) || [])[1] || '?';
 
       console.log(
-        `  ↳ VIDZY : variable E introuvable ` +
-        `(${html.length} octets, titre « ${title.trim()} »)`
+        `  ↳ VIDZY : lecteur introuvable (essai ${attempt}/2, ` +
+          `${html.length} octets, titre « ${title.trim()} »)`
       );
 
-      return [];
+      if (attempt === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      } else {
+        console.log(
+          `  ↳ VIDZY EXTRAIT : ${html.replace(/\s+/g, ' ').slice(0, 800)}`
+        );
+      }
     }
-
-    // Reproduction du décodage du lecteur Vidzy.
-    const hostSum = [...Buffer.from(host, 'utf8')].reduce(
-      (sum, char) => (sum + char) & 255,
-      0
-    );
-
-    const reversed = Buffer.from(encoded, 'base64').reverse();
-    const decoded = Buffer.alloc(reversed.length);
-
-    // Le lecteur calcule BC à partir de la largeur d'un élément HTML.
-    // La page diagnostiquée attend BC === 185.
-    const BC = 185;
-
-    for (let i = 0; i < reversed.length; i++) {
-      const key = (0x3d + i * 89 + hostSum + BC) & 255;
-      decoded[i] = reversed[i] ^ key;
-    }
-
-    const videoUrl = decoded.toString('utf8');
-
-    if (!/^https?:\/\//i.test(videoUrl)) {
-      console.log('  ↳ VIDZY : décodage invalide');
-      return [];
-    }
-
-    if (!/\.m3u8(?:[?#]|$)/i.test(videoUrl)) {
-      console.log('  ↳ VIDZY : URL décodée, mais pas de playlist HLS');
-      return [];
-    }
-
-    console.log('  ↳ VIDZY : URL HLS extraite');
-
-    return [
-      {
-        url: videoUrl,
-        kind: 'HLS',
-        headers: {
-          Referer: embedUrl,
-          Origin: `https://${host}`,
-          'User-Agent': UA,
-        },
-      },
-    ];
-  } catch (error) {
-    console.log(
-      `  ↳ VIDZY : ÉCHEC ${
-        error.response
-          ? 'HTTP ' + error.response.status
-          : error.code || error.message
-      }`
-    );
-
-    return [];
   }
+
+  if (!script) return [];
+
+  const encoded =
+    (script.match(/\}\)\("([A-Za-z0-9+/=]+)"\)/) || [])[1];
+
+  if (!encoded) return [];
+
+  let hostSum = 0;
+
+  for (const char of host) {
+    hostSum = (hostSum + char.charCodeAt(0)) & 0xff;
+  }
+
+  const reversed = Buffer.from(encoded, 'base64').reverse();
+  let decoded = '';
+
+  for (let i = 0; i < reversed.length; i++) {
+    const key = (0x3d + i * 89 + hostSum) & 0xff;
+    decoded += String.fromCharCode(reversed[i] ^ key);
+  }
+
+  if (!decoded.startsWith('http')) return [];
+
+  return [
+    {
+      url: decoded,
+      kind: 'HLS',
+      headers: {
+        Referer: `https://${host}/`,
+        Origin: `https://${host}`,
+        'User-Agent': UA,
+      },
+    },
+  ];
 }
 
 // ───────────── Vidaraa / Vidara ─────────────
