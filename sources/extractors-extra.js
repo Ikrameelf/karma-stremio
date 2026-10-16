@@ -1,4 +1,76 @@
 // Extracteurs supplémentaires, portés depuis Extractorlar.kt (plugin CloudStream Cs-Karma).
+// Vidzy : extraction des flux vidéo directement exposés par la page.
+// Ne contourne pas les contrôles d'accès ni les protections DRM.
+async function resolveVidzy(url, referer) {
+  let u;
+
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+
+  if (!/(^|\.)vidzy\.(cc|org)$/i.test(u.hostname)) {
+    return null;
+  }
+
+  try {
+    const { data } = await axios.get(url, {
+      timeout: 9000,
+      maxContentLength: 2000000,
+      responseType: 'text',
+      headers: {
+        'User-Agent': UA,
+        'Referer': referer || u.origin + '/'
+      }
+    });
+
+    const html = String(data);
+    const decoded = html
+      .replace(/\\\//g, '/')
+      .replace(/&amp;/g, '&');
+
+    const patterns = [
+      /<source\b[^>]*\bsrc=["']([^"']+)["']/gi,
+      /["']file["']\s*:\s*["']([^"']+)["']/gi,
+      /["'](?:hls|playlist|video_url)["']\s*:\s*["']([^"']+)["']/gi
+    ];
+
+    const found = new Set();
+
+    for (const re of patterns) {
+      for (const m of decoded.matchAll(re)) {
+        try {
+          const candidate = new URL(m[1], url);
+
+          if (
+            /^https?:$/.test(candidate.protocol) &&
+            /\.(m3u8|mp4)(?:$|[?#])/i.test(candidate.href)
+          ) {
+            found.add(candidate.href);
+          }
+        } catch {}
+      }
+    }
+
+    return [...found].slice(0, 3).map(videoUrl => ({
+      url: videoUrl,
+      kind: /\.m3u8(?:$|[?#])/i.test(videoUrl) ? 'HLS' : 'MP4',
+      headers: {
+        'Referer': u.origin + '/',
+        'User-Agent': UA
+      }
+    }));
+  } catch (err) {
+    console.log(
+      `Vidzy : ${err.response
+        ? 'HTTP ' + err.response.status
+        : err.code || err.message}`
+    );
+
+    return [];
+  }
+}
 // resolveExtra(url, referer) renvoie [{ url, kind, headers }], ou null si l'hôte n'est pas géré / échoue
 // (dans ce cas extractors.js continue avec ses méthodes génériques).
 // Si l'hôte a fait un timeout, renvoie un tableau vide avec la propriété timedOut = true.
