@@ -1,15 +1,7 @@
 // Extracteurs supplémentaires, portés depuis Extractorlar.kt (plugin CloudStream Cs-Karma).
 // Vidzy : extraction des flux vidéo directement exposés par la page.
 // Ne contourne pas les contrôles d'accès ni les protections DRM.
-async function resolveVidzy(url, referer) {
-  let u;
-
-  try {
-    u = new URL(url);
-  } catch {
-    return [];
-  }
-
+const { resolveExtra } = require('./extractors-extra');
   if (!/(^|\.)vidzy\.(cc|org)$/i.test(u.hostname)) {
     return null;
   }
@@ -74,7 +66,6 @@ async function resolveVidzy(url, referer) {
 // resolveExtra(url, referer) renvoie [{ url, kind, headers }], ou null si l'hôte n'est pas géré / échoue
 // (dans ce cas extractors.js continue avec ses méthodes génériques).
 // Si l'hôte a fait un timeout, renvoie un tableau vide avec la propriété timedOut = true.
-if (vidzy !== null) return vidzy;
 const axios = require('axios');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0';
@@ -295,27 +286,57 @@ async function uqload(url, referer) {
 }
 
 async function resolveExtra(url, referer) {
-  const vidzy = await resolveVidzy(url, referer);
   let host;
-  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }
+
   try {
-    if (/(^|\.)veev\./i.test(host)) return await veev(url);
-    if (/(^|\.)vidzy\./i.test(host)) return await vidzy(url, referer);
-    if (/(^|\.)vidaraa?\./i.test(host)) return await vidaraa(url); // vidara.to ET vidaraa.*
-    if (/(^|\.)goodstream\./i.test(host)) return await goodstream(url);
-    if (/(^|\.)uqload\./i.test(host)) return await uqload(url, referer);
-    if (/(^|\.)firestream\./i.test(host)) return await firestream(url, referer);
+    host = new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+
+  try {
+    if (/(^|\.)veev\./i.test(host)) {
+      return await veev(url);
+    }
+
+    if (/(^|\.)vidzy\.(cc|org)$/i.test(host)) {
+      return await vidzy(url, referer);
+    }
+
+    if (/(^|\.)vidaraa?\./i.test(host)) {
+      return await vidaraa(url);
+    }
+
+    if (/(^|\.)goodstream\./i.test(host)) {
+      return await goodstream(url);
+    }
+
+    if (/(^|\.)uqload\./i.test(host)) {
+      return await uqload(url, referer);
+    }
+
+    if (/(^|\.)firestream\./i.test(host)) {
+      return await firestream(url, referer);
+    }
   } catch (e) {
     const timedOut = /ECONNABORTED|ETIMEDOUT/.test(e.code || '');
-    console.log(`  ↳ extra ${host} : ÉCHEC ${e.response ? 'HTTP ' + e.response.status : e.code || e.message}`);
+
+    console.log(
+      `  ↳ extra ${host} : ÉCHEC ${
+        e.response ? 'HTTP ' + e.response.status : e.code || e.message
+      }`
+    );
+
     if (timedOut) {
-      // Inutile de réessayer la même page avec la méthode générique : on signale le timeout.
       const empty = [];
       empty.timedOut = true;
       return empty;
     }
+
+    return [];
   }
+
   return null;
 }
 
-module.exports = { resolveExtra };
+module.exports = { resolveEmbed, unpackAll };
