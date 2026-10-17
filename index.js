@@ -424,6 +424,55 @@ app.get('/debug/vidzy-js', async (req, res) => {
   }
 });
 
+const dns = require('dns').promises;
+const net = require('net');
+
+app.get('/debug/network', async (req, res) => {
+  const host = '4fw4gd.cfglobalcdn.com';
+  const port = 443;
+
+  let dnsResult;
+
+  try {
+    dnsResult = await dns.lookup(host, { all: true });
+  } catch (e) {
+    return res.json({
+      host,
+      etape: 'DNS',
+      erreur: e.code || e.message,
+    });
+  }
+
+  const tcpResult = await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve({ ok: false, erreur: 'TIMEOUT' });
+    }, 5000);
+
+    socket.once('connect', () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ ok: true });
+    });
+
+    socket.once('error', (e) => {
+      clearTimeout(timer);
+      resolve({
+        ok: false,
+        code: e.code || null,
+        erreur: e.message,
+      });
+    });
+  });
+
+  res.json({
+    host,
+    dns: dnsResult,
+    tcp_443: tcpResult,
+  });
+});
+
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
 const fs = require('./sources/frenchstream');
