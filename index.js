@@ -63,6 +63,7 @@ builder.defineMetaHandler(async ({ id }) => {
 // Appelle toutes les sources dont le préfixe correspond à l'ID et fusionne leurs flux.
 // Le résultat est gardé 2 minutes : Nuvio demande flux et sous-titres presque en même temps.
 
+
 const streamCache = new Map();
 
 function collectStreams(type, id) {
@@ -150,7 +151,6 @@ function collectStreams(type, id) {
 
   return p;
 }
-
 
 builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
 
