@@ -255,11 +255,11 @@ async function resolveEmbed(url, referer, depth = 2) {
     if (DOOD.test(hostKey)) return await resolveDood(url);
     const extra = await resolveExtra(url, referer);
     if (extra && extra.length) return extra;
-    if (extra && extra.timedOut) {
-      // L'extracteur dédié a fait un timeout : inutile de refaire la même requête en mode générique.
-      markDead(hostKey);
-      return [];
-    }
+if (extra && extra.timedOut) {
+  console.log(
+    `  ↳ ${hostKey}: extracteur spécialisé expiré ; tentative générique`
+  );
+}
     const pageReq = () => axios.get(url, {
       timeout: PAGE_TIMEOUT,
       maxContentLength: 1500000,
