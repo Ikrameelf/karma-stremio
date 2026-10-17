@@ -90,8 +90,20 @@ async function handler(req, res) {
     up.data.pipe(res);
     req.on('close', () => up.data.destroy());
   } catch (e) {
-    console.log('proxy ÉCHEC', e.response ? `HTTP ${e.response.status} (serveur : ${e.response.headers['server'] || '?'})` : e.code || e.message, target.slice(0, 120));
-    if (!res.headersSent) res.status(502).end();
+console.log('proxy ÉCHEC', {
+  code: e.code || null,
+  message: e.message,
+  hostname: (() => {
+    try {
+      return new URL(target).hostname;
+    } catch {
+      return null;
+    }
+  })(),
+  httpStatus: e.response?.status || null,
+  server: e.response?.headers?.server || null,
+  elapsedMs: e.config?.timeout || null
+});    if (!res.headersSent) res.status(502).end();
   }
 }
 
