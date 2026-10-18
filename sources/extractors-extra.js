@@ -1,4 +1,4 @@
-// Extracteurs supplémentaires pour Karma.
+
 const axios = require('axios');
 
 const UA =
@@ -454,10 +454,10 @@ async function uqload(url, referer) {
     },
   ];
 }
-// ───────────── Vidmoly / Sibnet / SeekStreaming ─────────────
 
-// Extraction simple des URL vidéo explicitement présentes dans le HTML.
-// Ne simule pas un navigateur et ne contourne pas les protections du lecteur.
+// ───────────── Extraction de médias visibles ─────────────
+
+// Fonction limitée aux URL directement présentes dans le HTML.
 async function extractVisibleMedia(url, referer) {
   const origin = new URL(url).origin;
 
@@ -493,26 +493,25 @@ async function extractVisibleMedia(url, referer) {
       continue;
     }
 
-    if (
-      !/^https?:$/.test(new URL(streamUrl).protocol) ||
-      !/\.(m3u8|mp4)(?:$|\?)/i.test(streamUrl)
-    ) {
-      continue;
-    }
+    if (!/^https?:$/.test(new URL(streamUrl).protocol)) continue;
+    if (!/\.(m3u8|mp4)(?:$|\?)/i.test(streamUrl)) continue;
 
-    return [{
-      url: streamUrl,
-      kind: /\.m3u8(?:$|\?)/i.test(streamUrl) ? 'HLS' : 'MP4',
-      headers: {
-        Referer: url,
-        Origin: origin,
-        'User-Agent': UA,
+    return [
+      {
+        url: streamUrl,
+        kind: /\.m3u8(?:$|\?)/i.test(streamUrl) ? 'HLS' : 'MP4',
+        headers: {
+          Referer: url,
+          Origin: origin,
+          'User-Agent': UA,
+        },
       },
-    }];
+    ];
   }
 
   return [];
 }
+
 // ───────────── Routage des extracteurs ─────────────
 
 async function resolveExtra(url, referer) {
@@ -548,6 +547,18 @@ async function resolveExtra(url, referer) {
     if (/(^|\.)firestream\./i.test(host)) {
       return await firestream(url, referer);
     }
+
+    if (/(^|\.)vidmoly\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
+
+    if (/(^|\.)sibnet\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
+
+    if (/(^|\.)seekstreaming\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
   } catch (error) {
     const timedOut = /ECONNABORTED|ETIMEDOUT/.test(error.code || '');
 
@@ -571,16 +582,4 @@ async function resolveExtra(url, referer) {
   return null;
 }
 
-// Important : ce fichier exporte resolveExtra.
 module.exports = { resolveExtra };
-    if (/(^|\.)vidmoly\./i.test(host)) {
-      return await extractVisibleMedia(url, referer);
-    }
-
-    if (/(^|\.)sibnet\./i.test(host)) {
-      return await extractVisibleMedia(url, referer);
-    }
-
-    if (/(^|\.)seekstreaming\./i.test(host)) {
-      return await extractVisibleMedia(url, referer);
-    }
