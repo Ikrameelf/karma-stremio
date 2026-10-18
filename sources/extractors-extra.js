@@ -454,7 +454,65 @@ async function uqload(url, referer) {
     },
   ];
 }
+// ───────────── Vidmoly / Sibnet / SeekStreaming ─────────────
 
+// Extraction simple des URL vidéo explicitement présentes dans le HTML.
+// Ne simule pas un navigateur et ne contourne pas les protections du lecteur.
+async function extractVisibleMedia(url, referer) {
+  const origin = new URL(url).origin;
+
+  const response = await axios.get(url, {
+    timeout: T,
+    responseType: 'text',
+    maxContentLength: 3000000,
+    headers: {
+      'User-Agent': UA,
+      Referer: referer || origin + '/',
+      Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+    },
+  });
+
+  const html = String(response.data).replace(/\\\//g, '/');
+
+  const patterns = [
+    /["'](?:file|src|hls|url)["']\s*:\s*["']([^"']+\.m3u8(?:\?[^"']*)?)["']/i,
+    /["']([^"']+\.m3u8(?:\?[^"']*)?)["']/i,
+    /["'](?:file|src|url)["']\s*:\s*["']([^"']+\.mp4(?:\?[^"']*)?)["']/i,
+    /<source[^>]+src=["']([^"']+\.(?:m3u8|mp4)(?:\?[^"']*)?)["']/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) continue;
+
+    let streamUrl;
+
+    try {
+      streamUrl = new URL(match[1], url).href;
+    } catch {
+      continue;
+    }
+
+    if (
+      !/^https?:$/.test(new URL(streamUrl).protocol) ||
+      !/\.(m3u8|mp4)(?:$|\?)/i.test(streamUrl)
+    ) {
+      continue;
+    }
+
+    return [{
+      url: streamUrl,
+      kind: /\.m3u8(?:$|\?)/i.test(streamUrl) ? 'HLS' : 'MP4',
+      headers: {
+        Referer: url,
+        Origin: origin,
+        'User-Agent': UA,
+      },
+    }];
+  }
+
+  return [];
+}
 // ───────────── Routage des extracteurs ─────────────
 
 async function resolveExtra(url, referer) {
@@ -515,3 +573,14 @@ async function resolveExtra(url, referer) {
 
 // Important : ce fichier exporte resolveExtra.
 module.exports = { resolveExtra };
+    if (/(^|\.)vidmoly\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
+
+    if (/(^|\.)sibnet\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
+
+    if (/(^|\.)seekstreaming\./i.test(host)) {
+      return await extractVisibleMedia(url, referer);
+    }
