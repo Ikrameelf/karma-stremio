@@ -270,18 +270,39 @@ async function streamFull(id, type) {
     for (const d of r.value.direct) {
       if (seen.has(d.url)) continue;
       seen.add(d.url);
-      direct.push(playable({ name: `Movix ${r.value.brand}`, title: d.title, url: d.url, headers: d.headers }));
+      if (/\.(mp4|mkv|webm)(\?|$)/i.test(d.url)) {
+        direct.push({
+          name: `Movix ${r.value.brand}`,
+          title: d.title,
+          url: d.url,
+          behaviorHints: { notWebReady: true, proxyHeaders: { request: d.headers || {} } },
+        });
+      } else {
+        direct.push(playable({ name: `Movix ${r.value.brand}`, title: d.title, url: d.url, headers: d.headers }));
+      }
     }
     for (const url of r.value.urls) {
       if (seen.has(url)) continue;
       seen.add(url);
-      if (DIRECT.test(url)) {
-        direct.push(playable({
-          name: `Movix ${r.value.brand}`,
-          title: DIRECT.exec(url)[1].toUpperCase(),
-          url,
-          headers: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA },
-        }));
+      const directMatch = url.match(DIRECT);
+      if (directMatch) {
+        const ext = (directMatch[1] || '').toLowerCase();
+        if (ext === 'mp4' || ext === 'mkv' || ext === 'webm') {
+          // MP4 direct : on évite le proxy Render (qui se suspend) et on transmet les headers.
+          direct.push({
+            name: `Movix ${r.value.brand}`,
+            title: ext.toUpperCase(),
+            url,
+            behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA } } },
+          });
+        } else {
+          direct.push(playable({
+            name: `Movix ${r.value.brand}`,
+            title: ext.toUpperCase(),
+            url,
+            headers: { Referer: HEADERS.Referer, Origin: HEADERS.Origin, 'User-Agent': UA },
+          }));
+        }
       } else if (!url.includes(`api.${DOMAIN}`)) {
         embeds.push({ brand: r.value.brand, url });
       }
@@ -297,7 +318,17 @@ async function streamFull(id, type) {
       const links = await embedLimit(() => resolveEmbed(url, HEADERS.Referer));
       console.log(`Movix embed ${host}: ${links.length} lien(s) vidéo`);
       return links.length
-        ? links.map((l) => playable({ name: `Movix ${brand}`, title: `${host} · ${l.kind}`, url: l.url, headers: l.headers }))
+        ? links.map((l) => {
+            if ((l.kind || '').toUpperCase() === 'MP4') {
+              return {
+                name: `Movix ${brand}`,
+                title: `${host} · ${l.kind}`,
+                url: l.url,
+                behaviorHints: { notWebReady: true, proxyHeaders: { request: l.headers || {} } },
+              };
+            }
+            return playable({ name: `Movix ${brand}`, title: `${host} · ${l.kind}`, url: l.url, headers: l.headers });
+          })
         : [{ name: `Movix ${brand}`, title: `${host} · navigateur`, externalUrl: url }];
     })
   );
