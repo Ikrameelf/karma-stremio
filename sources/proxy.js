@@ -107,6 +107,10 @@ async function handler(req, res) {
     return res.status(400).end();
   }
 
+  let _target;
+  try { _target = Buffer.from(u, 'base64url').toString(); } catch { _target = u; }
+  console.log('[PROXY] requête reçue :', _target);
+
   const expected = Buffer.from(sign(u, h));
   const received = Buffer.from(String(sig));
 
@@ -230,16 +234,16 @@ async function handler(req, res) {
 
     res.status(response.status);
 
-    for (const key of [
-      'content-type',
-      'content-length',
-      'content-range',
-      'accept-ranges',
-    ]) {
-      if (response.headers[key]) {
-        res.set(key, response.headers[key]);
-      }
+    const ct = response.headers['content-type'] || (/\.(mp4|m4v)$/i.test(target) ? 'video/mp4'
+      : /\.m3u8$/i.test(target) ? 'application/vnd.apple.mpegurl' : undefined);
+    if (ct) res.set('Content-Type', ct);
+    for (const key of ['content-length', 'content-range']) {
+      if (response.headers[key]) res.set(key, response.headers[key]);
     }
+    // Nuvio (et d'autres lecteurs) refusent parfois de démarrer sans Accept-Ranges.
+    res.set('Accept-Ranges', response.headers['accept-ranges'] || 'bytes');
+    res.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+    res.set('Content-Disposition', 'inline');
 
     upstream.on('error', (error) => {
       console.log('proxy ERREUR flux amont', {
