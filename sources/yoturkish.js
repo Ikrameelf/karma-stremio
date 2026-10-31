@@ -108,8 +108,12 @@ function directStream(url, label, headers) {
 function collectStatic(html) {
   const $ = cheerio.load(html);
   const found = new Set();
-  const dl = abs($('.dl-contenti a').first().attr('href'));
-  if (dl) found.add(dl);
+  // On garde tous les serveurs de téléchargement (pas seulement le premier),
+  // pour multiplier les chances d'extraction d'un lien lisible.
+  $('.dl-contenti a').each((_, el) => {
+    const dl = abs($(el).attr('href'));
+    if (dl) found.add(dl);
+  });
   $('iframe').each((_, el) => {
     const s = abs($(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src'));
     if (s && /^https?:/.test(s)) found.add(s);
@@ -133,8 +137,8 @@ async function collectWithBrowser(url) {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForSelector('.optitabs a[href^="#tab"]', { timeout: 5000 }).catch(() => {});
 
-    const dl = await page.$eval('.dl-contenti a', (a) => a.href).catch(() => null);
-    if (dl) found.add(dl);
+    const dls = await page.$$eval('.dl-contenti a', (as) => as.map((a) => a.href)).catch(() => []);
+    dls.forEach((d) => { if (d) found.add(d); });
 
     const tabs = await page.$$('.optitabs a[href^="#tab"]');
     for (const tab of tabs) {
@@ -152,11 +156,41 @@ async function collectWithBrowser(url) {
 }
 
 async function stream(id) {
-  const parts = id.split(':'); // yot:ep:<épisode>:<série>:<numéro>
-  if (parts[1] !== 'ep' || !parts[2]) return []; // id de série : pas de flux
-  const epUrl = BASE + dec(parts[2]);
-  const seriesPath = parts[3] ? dec(parts[3]) : null;
-  const epNum = parseInt(parts[4], 10) || null;
+  // Compatibilité : deux formats d'identifiants d'épisode ont existé.
+  //   - "yot:ep:<epEnc>:<sérieEnc>:<n>"   (format actuel)
+  //   - "yot:ep:<epEnc>.<extraEnc>"        (ancien format, extraEnc = base64("nom|n"))
+  // Nuvio (et Stremio) peuvent encore détenir des identifiants de l'ancien format :
+  // on les accepte tous les deux pour ne jamais perdre les liens.
+  if (!id || !String(id).startsWith('yot:ep:')) return []; // id de série : pas de flux
+  const rest = String(id).slice('yot:ep:'.length);
+  let epPath = null, seriesPath = null, epNum = null;
+  try {
+    if (rest.includes(':')) {
+      const parts = rest.split(':');
+      epPath = dec(parts[0]);
+      if (parts[1]) seriesPath = dec(parts[1]);
+      if (parts[2]) epNum = parseInt(parts[2], 10) || null;
+    } else if (rest.includes('.')) {
+      const dot = rest.indexOf('.');
+      epPath = dec(rest.slice(0, dot));
+      const raw = dec(rest.slice(dot + 1));
+      const cut = raw.lastIndexOf('|');
+      if (cut > 0) {
+        const name = raw.slice(0, cut);
+        epNum = parseInt(raw.slice(cut + 1), 10) || null;
+        // On reconstruit un chemin de série pour que YouTube et TurkVOST puissent
+        // encore fonctionner avec les anciens identifiants.
+        seriesPath = '/' + name + '/';
+      }
+    } else {
+      epPath = dec(rest);
+    }
+  } catch (e) {
+    console.log(`YoTurkish id illisible (${id}) : ${e.message}`);
+    return [];
+  }
+  if (!epPath) return [];
+  const epUrl = BASE + epPath;
   let html;
   try {
     html = await getHtml(epUrl);
@@ -210,8 +244,13 @@ async function stream(id) {
   const directLinks = streams.filter((x) => x.url);
   const browserLinks = streams.filter((x) => x.externalUrl);
   // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
-  const showBrowser = process.env.SHOW_BROWSER_LINKS;
-  return [...ytLinks, ...directLinks, ...(showBrowser ? browserLinks : [])];
+  // Nuvio (et d'autres clients) n'affichent parfois aucun lien si seuls les liens
+  // "navigateur" sont disponibles et qu'ils sont masqués par défaut : on les garde
+  // donc dès qu'aucun flux direct/YouTube n'a pu être extrait, sauf si
+  // HIDE_BROWSER_LINKS est défini.
+  const hideBrowser = process.env.HIDE_BROWSER_LINKS && !process.env.SHOW_BROWSER_LINKS;
+  const showBrowser = !!process.env.SHOW_BROWSER_LINKS || (ytLinks.length === 0 && directLinks.length === 0);
+  return [...ytLinks, ...directLinks, ...(hideBrowser ? [] : (showBrowser ? browserLinks : []))];
 }
 
 module.exports = {
