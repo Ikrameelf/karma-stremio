@@ -111,7 +111,14 @@ async function findStreams(seriesPath, epNum) {
     console.log(`TurkVOST taille : ${mb.toFixed(0)} Mo`);
   } catch (e) { console.log('TurkVOST taille indisponible :', e.response ? 'HTTP ' + e.response.status : e.message); }
 
-  const stream = playable({ name: 'TurkVOST', title: 'TurkVOST VOSTFR (MP4)', url, headers: HEADERS });
+  // On évite le proxy Render (qui se suspend) : le MP4 est lisible directement,
+  // et on transmet les headers nécessaires au lecteur via proxyHeaders.
+  const stream = {
+    name: 'TurkVOST',
+    title: 'TurkVOST VOSTFR (MP4)',
+    url,
+    behaviorHints: { notWebReady: true, proxyHeaders: { request: HEADERS } },
+  };
   const subtitles = parseSubtitles(html);
   if (subtitles.length) stream.subtitles = subtitles;
   console.log(`TurkVOST ${epUrl} : MP4 + ${subtitles.length} sous-titre(s)`);
