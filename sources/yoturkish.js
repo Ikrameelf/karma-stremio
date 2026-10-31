@@ -250,7 +250,10 @@ async function stream(id) {
   // HIDE_BROWSER_LINKS est défini.
   const hideBrowser = process.env.HIDE_BROWSER_LINKS && !process.env.SHOW_BROWSER_LINKS;
   const showBrowser = !!process.env.SHOW_BROWSER_LINKS || (ytLinks.length === 0 && directLinks.length === 0);
-  return [...ytLinks, ...directLinks, ...(hideBrowser ? [] : (showBrowser ? browserLinks : []))];
+  const out = [...ytLinks, ...directLinks, ...(hideBrowser ? [] : (showBrowser ? browserLinks : []))];
+  // Diagnostic : affiche les URLs réellement renvoyées (proxy Render ou direct).
+  console.log('[yot] URLs renvoyées :', out.map((x) => x.url || x.externalUrl || ('yt:' + x.ytId)));
+  return out;
 }
 
 module.exports = {
