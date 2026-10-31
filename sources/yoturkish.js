@@ -191,17 +191,15 @@ async function stream(id) {
   }
   if (!epPath) return [];
   const epUrl = BASE + epPath;
-
-  // CORRECTIF 1 : plus de "throw" si la page est inaccessible (403 Cloudflare, etc.).
-  // YouTube et TurkVOST doivent s'afficher quand même.
-  let html = '';
+  let html;
   try {
     html = await getHtml(epUrl);
   } catch (e) {
     console.log(`YoTurkish ${epUrl} : page inaccessible (${e.response ? 'HTTP ' + e.response.status + ', serveur : ' + (e.response.headers['server'] || '?') : e.code || e.message})`);
+    throw e;
   }
 
-  let candidates = html ? collectStatic(html) : [];
+  let candidates = collectStatic(html);
   if (!candidates.length || process.env.FORCE_BROWSER) {
     try {
       candidates = [...new Set([...candidates, ...(await collectWithBrowser(epUrl))])];
@@ -229,30 +227,25 @@ async function stream(id) {
   } catch (e) {
     console.log('TurkVOST :', e.message);
   }
-
-  // CORRECTIF 2 : résolution des lecteurs en parallèle, 10 s maximum chacun,
-  // pour ne pas dépasser le délai de Nuvio. Logs de diagnostic ajoutés.
-  console.log('[yot] candidats :', candidates);
-  const uniq = [...new Set(candidates)];
-  await Promise.all(uniq.map(async (url) => {
+  const seen = new Set();
+  for (const url of candidates) {
+    if (seen.has(url)) continue;
+    seen.add(url);
     if (/\.m3u8|\/sora\//i.test(url)) {
       streams.push(directStream(url, 'Direct (HLS)'));
-      return;
+      continue;
     }
-    let links = [];
-    try {
-      links = await Promise.race([
-        resolveEmbed(url, epUrl),
-        new Promise((r) => setTimeout(() => r([]), 10000)),
-      ]);
-    } catch (e) {
-      console.log(`[yot] resolveEmbed ${url} : ${e.message}`);
-    }
-    console.log(`[yot] resolveEmbed ${url} -> ${links.length} lien(s)`);
-    if (links.length) links.forEach((l) => streams.push(directStream(l.url, `Direct (${l.kind})`, l.headers)));
+    const links = await resolveEmbed(url, epUrl);
+    if (links.length) links.forEach((l) => streams.push({
+      name: 'YoTurkish',
+      title: `Direct (${l.kind})`,
+      url: l.url,
+      // On évite le proxy Render (service qui se suspend) : le lien direct est
+      // lisible tel quel, et on transmet les headers au lecteur via proxyHeaders.
+      behaviorHints: { notWebReady: true, proxyHeaders: { request: l.headers || {} } },
+    }));
     else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
-  }));
-
+  }
   console.log(`YoTurkish ${epUrl} : ${candidates.length} lecteur(s) trouvé(s), ${streams.filter((x) => x.ytId).length} YouTube, ${streams.filter((x) => x.url).length} direct(s), ${streams.filter((x) => x.externalUrl).length} navigateur`);
   const ytLinks = streams.filter((x) => x.ytId);
   const directLinks = streams.filter((x) => x.url);
