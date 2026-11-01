@@ -6,6 +6,7 @@ const { playable } = require('./proxy');
 const tmdb = require('./tmdb');
 const youtube = require('./youtube');
 const turkvost = require('./turkvost');
+const elisa = require('./elisasaddictions');
 
 const BASE = 'https://yoturkish.to';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -258,6 +259,11 @@ async function stream(id) {
     streams.push(...turkvostStreams);
   } catch (e) {
     console.log('TurkVOST :', e.message);
+  }
+  try {
+    streams.push(...(await elisa.findStreams(seriesPath, epNum)));
+  } catch (e) {
+    console.log('Elisa :', e.message);
   }
   // Les sous-titres TurkVOST (VTT) sont aussi utiles pour les liens YouTube,
   // dont le lecteur interne n'affiche pas d'icône de sous-titres par défaut.
