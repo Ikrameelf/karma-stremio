@@ -83,6 +83,7 @@ async function meta(id) {
   // Identifiant IMDb (pour que les addons de sous-titres reconnaissent la série).
   const year = ($('span a[href*="year/"]').first().text().trim().match(/\d{4}/) || [])[0] || null;
   const imdbId = await tmdb.getImdbId(name, year).catch(() => null);
+  console.log(`[yot] meta "${name}" : imdbId=${imdbId}`);
   if (imdbId) imdbToPath.set(imdbId, path);
 
   const videos = $('div#episodes a.episod').toArray().reverse().map((el, i) => {
