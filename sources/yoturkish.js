@@ -222,10 +222,20 @@ async function stream(id) {
   } catch (e) {
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
   }
+  let turkvostStreams = [];
   try {
-    streams.push(...(await turkvost.findStreams(seriesPath, epNum)));
+    turkvostStreams = await turkvost.findStreams(seriesPath, epNum);
+    streams.push(...turkvostStreams);
   } catch (e) {
     console.log('TurkVOST :', e.message);
+  }
+  // Les sous-titres TurkVOST (VTT) sont aussi utiles pour les liens YouTube,
+  // dont le lecteur interne n'affiche pas d'icône de sous-titres par défaut.
+  const turkvostSubs = turkvostStreams.flatMap((s) => s.subtitles || []);
+  if (turkvostSubs.length) {
+    streams.forEach((s) => {
+      if (s.ytId && !s.subtitles) s.subtitles = turkvostSubs;
+    });
   }
   const seen = new Set();
   for (const url of candidates) {
