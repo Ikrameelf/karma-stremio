@@ -25,6 +25,11 @@ const MP4_RE = /https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*/gi;
 
 const enc = (s) => Buffer.from(s).toString('base64url');
 const dec = (s) => Buffer.from(s, 'base64url').toString();
+
+// Mapping IMDb -> chemin YoTurkish, pour permettre l'usage d'IDs IMDb
+// (reconnus par les addons de sous-titres) tout en gardant le chemin du site.
+const imdbToPath = new Map();
+const episodeMap = new Map();
 const abs = (u) => { try { return u ? new URL(u, BASE).href : undefined; } catch { return undefined; } };
 const pathOf = (href) => { const u = new URL(href, BASE); return u.pathname + u.search; };
 const getHtml = async (url, headers = {}) => (await http.get(url, { headers, responseType: 'text' })).data;
@@ -75,11 +80,24 @@ async function meta(id) {
   const genres = [...new Set($('span a[href*="genre/"]').map((_, e) => $(e).text().trim()).get())];
   const cast = $('span.shorting a').map((_, e) => $(e).text().trim()).get();
 
+  // Identifiant IMDb (pour que les addons de sous-titres reconnaissent la série).
+  const year = ($('span a[href*="year/"]').first().text().trim().match(/\d{4}/) || [])[0] || null;
+  const imdbId = await tmdb.getImdbId(name, year).catch(() => null);
+  if (imdbId) imdbToPath.set(imdbId, path);
+
   const videos = $('div#episodes a.episod').toArray().reverse().map((el, i) => {
     const a = $(el);
     const n = parseInt((a.text().match(/Episode\s*(\d+)/i) || [])[1], 10) || i + 1;
+    const epPath = pathOf(a.attr('href'));
+    let id;
+    if (imdbId) {
+      id = `tt${imdbId}:1:${n}`;
+      episodeMap.set(id, epPath);
+    } else {
+      id = `yot:ep:${enc(epPath)}:${enc(path)}:${n}`;
+    }
     return {
-      id: `yot:ep:${enc(pathOf(a.attr('href')))}:${enc(path)}:${n}`,
+      id,
       title: `Episode ${n}`,
       season: 1,
       episode: n,
@@ -161,9 +179,18 @@ async function stream(id) {
   //   - "yot:ep:<epEnc>.<extraEnc>"        (ancien format, extraEnc = base64("nom|n"))
   // Nuvio (et Stremio) peuvent encore détenir des identifiants de l'ancien format :
   // on les accepte tous les deux pour ne jamais perdre les liens.
-  if (!id || !String(id).startsWith('yot:ep:')) return []; // id de série : pas de flux
-  const rest = String(id).slice('yot:ep:'.length);
+  if (!id) return [];
   let epPath = null, seriesPath = null, epNum = null;
+  // IDs IMDb (tt...) : on retrouve le chemin YoTurkish via les maps peuplées par meta().
+  if (String(id).startsWith('tt')) {
+    const parts = String(id).split(':');
+    const imdbId = parts[0];
+    epNum = parseInt(parts[2], 10) || null;
+    epPath = episodeMap.get(String(id));
+    if (!epPath) return [];
+    seriesPath = imdbToPath.get(imdbId) || null;
+  } else if (String(id).startsWith('yot:ep:')) {
+  const rest = String(id).slice('yot:ep:'.length);
   try {
     if (rest.includes(':')) {
       const parts = rest.split(':');
@@ -189,6 +216,7 @@ async function stream(id) {
     console.log(`YoTurkish id illisible (${id}) : ${e.message}`);
     return [];
   }
+  } // fin else if yot:ep:
   if (!epPath) return [];
   const epUrl = BASE + epPath;
   let html;

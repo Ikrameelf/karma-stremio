@@ -90,6 +90,17 @@ function patch(meta, d) {
   return out;
 }
 
+// Renvoie l'identifiant IMDb de la série (ou null) pour permettre l'usage d'IDs IMDb.
+async function getImdbId(name, year) {
+  if (!KEY) return null;
+  try {
+    const d = await load(cleanTitle(name), year);
+    return (d && d.external_ids && d.external_ids.imdb_id) ? d.external_ids.imdb_id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Renvoie toujours une fiche valide : la version enrichie, ou celle reçue en cas de problème.
 async function enrich(meta) {
   if (!KEY || process.env.TMDB_META === '0' || !meta || !meta.name) return meta;
@@ -110,4 +121,4 @@ async function enrich(meta) {
   }
 }
 
-module.exports = { enrich, norm };
+module.exports = { enrich, norm, getImdbId };
