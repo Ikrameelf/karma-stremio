@@ -48,7 +48,7 @@ function parseCards($) {
     const poster = abs(img.attr('src') || img.attr('data-src'));
     const rating = ($(el).find('span.imdb').first().text().match(/[\d.]+/) || [])[0];
     // Suffixe de version pour forcer Nuvio à recharger les métadonnées (et passer aux IDs IMDb).
-    const id = 'yot:' + enc(pathOf(href)) + ':v2';
+    const id = 'yot2:' + enc(pathOf(href));
     if (!cards.has(id)) cards.set(id, { id, type: 'series', name: title.trim(), poster, imdbRating: rating });
   });
   return [...cards.values()];
@@ -71,7 +71,7 @@ async function catalog({ genre, search, skip = 0 }) {
 
 // ---------- Fiche série ----------
 async function meta(id) {
-  const path = dec(String(id).slice(4).split(':')[0]);
+  const path = dec(String(id).slice(5).split(':')[0]);
   const $ = cheerio.load(await getHtml(BASE + path));
 
   const name = $('h1').first().text().trim();
@@ -96,7 +96,7 @@ async function meta(id) {
       id = `tt${imdbId}:1:${n}`;
       episodeMap.set(id, epPath);
     } else {
-      id = `yot:ep:${enc(epPath)}:${enc(path)}:${n}`;
+      id = `yot2:ep:${enc(epPath)}:${enc(path)}:${n}`;
     }
     return {
       id,
@@ -191,8 +191,8 @@ async function stream(id) {
     epPath = episodeMap.get(String(id));
     if (!epPath) return [];
     seriesPath = imdbToPath.get(imdbId) || null;
-  } else if (String(id).startsWith('yot:ep:')) {
-  const rest = String(id).slice('yot:ep:'.length);
+  } else if (String(id).startsWith('yot2:ep:')) {
+  const rest = String(id).slice('yot2:ep:'.length);
   try {
     if (rest.includes(':')) {
       const parts = rest.split(':');
@@ -304,7 +304,7 @@ async function stream(id) {
 }
 
 module.exports = {
-  prefix: 'yot:',
+  prefix: 'yot2:',
   catalogId: 'yoturkish2',
   catalogName: 'YoTurkish 2',
   types: ['series'],
