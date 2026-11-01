@@ -248,6 +248,12 @@ async function stream(id) {
         name: 'YoTurkish',
         title: i === 0 ? 'YouTube (chaîne officielle)' : `YouTube (autre vidéo ${i})`,
         ytId,
+        // Sous-titres YouTube (auto-générés et manuels) — disponibles si la vidéo en a.
+        subtitles: [
+          { id: `yt-${ytId}-en`, lang: 'eng', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=en&fmt=vtt` },
+          { id: `yt-${ytId}-en-asr`, lang: 'eng', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=en&kind=asr&fmt=vtt` },
+          { id: `yt-${ytId}-fr`, lang: 'fre', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=fr&fmt=vtt` },
+        ],
       }));
   } catch (e) {
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
@@ -264,7 +270,7 @@ async function stream(id) {
   const turkvostSubs = turkvostStreams.flatMap((s) => s.subtitles || []);
   if (turkvostSubs.length) {
     streams.forEach((s) => {
-      if (s.ytId && !s.subtitles) s.subtitles = turkvostSubs;
+      if (s.ytId) s.subtitles = [...(s.subtitles || []), ...turkvostSubs];
     });
   }
   const seen = new Set();
