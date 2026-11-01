@@ -25,6 +25,18 @@ async function check(url) {
     return 'yes';
   } catch (e) {
     if (e.response && e.response.status === 404) return 'no';
+    if (e.response && e.response.status === 429) {
+      // Rate limit : on attend et on réessaie une fois.
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        await http.get(url, { responseType: 'text' });
+        return 'yes';
+      } catch (e2) {
+        if (e2.response && e2.response.status === 404) return 'no';
+        console.log(`TurkVOST ${url} : ${e2.response ? 'HTTP ' + e2.response.status + ' (serveur : ' + (e2.response.headers['server'] || '?') + ')' : e2.code || e2.message}`);
+        return 'error';
+      }
+    }
     console.log(`TurkVOST ${url} : ${e.response ? 'HTTP ' + e.response.status + ' (serveur : ' + (e.response.headers['server'] || '?') + ')' : e.code || e.message}`);
     return 'error';
   }
@@ -36,12 +48,21 @@ async function findSlug(seriesPath) {
   const base = ALIASES[last] || slugify(last);
   if (slugCache.has(base)) return slugCache.get(base);
   const candidates = [...new Set([base, base.replace(/-(izle|vostfr|streaming)$/, '')])];
-  let found = null;
-  let sawError = false;
-  for (const c of candidates) {
-    const r = await check(`${BASE}/serie/${c}-vostfr`);
-    if (r === 'yes') { found = c; break; }
-    if (r === 'error') sawError = true;
+  const tryOnce = async () => {
+    let found = null;
+    let sawError = false;
+    for (const c of candidates) {
+      const r = await check(`${BASE}/serie/${c}-vostfr`);
+      if (r === 'yes') { found = c; break; }
+      if (r === 'error') sawError = true;
+    }
+    return { found, sawError };
+  };
+  let { found, sawError } = await tryOnce();
+  // En cas de 429 (rate limit), on attend un peu et on réessaie une fois.
+  if (!found && sawError) {
+    await new Promise((r) => setTimeout(r, 2000));
+    ({ found, sawError } = await tryOnce());
   }
   if (found) slugCache.set(base, found);
   else if (!sawError) slugCache.set(base, null); // on ne mémorise l'absence que si le site a répondu 404
