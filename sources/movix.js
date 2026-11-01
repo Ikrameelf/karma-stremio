@@ -336,6 +336,7 @@ async function streamFull(id, type) {
   const all = [...direct, ...resolved.flat(), ...extra];
   const playableLinks = all.filter((x) => x.url);
   const browserLinks = all.filter((x) => !x.url);
+  console.log('[movix] URLs renvoyées :', [...playableLinks, ...browserLinks].map((x) => x.url || x.externalUrl));
   // Les liens "navigateur" ne sont gardés que s'il n'y a rien de lisible (ou si SHOW_BROWSER_LINKS=1).
   return playableLinks.length && !process.env.SHOW_BROWSER_LINKS ? playableLinks : [...playableLinks, ...browserLinks];
 }
