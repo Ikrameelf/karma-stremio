@@ -475,6 +475,15 @@ app.get('/debug/network', async (req, res) => {
 
 const PORT = Number(process.env.PORT) || 7000;
 app.listen(PORT, () => console.log(`Addon prêt : http://127.0.0.1:${PORT}/manifest.json`));
+
+// Keep-alive : évite la suspension du service gratuit (Render) en le pingant régulièrement.
+const PUBLIC_URL_KEEPALIVE = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+if (PUBLIC_URL_KEEPALIVE) {
+  setInterval(() => {
+    axios.get(PUBLIC_URL_KEEPALIVE + '/manifest.json').catch(() => {});
+  }, 10 * 60 * 1000);
+  console.log('Keep-alive activé vers', PUBLIC_URL_KEEPALIVE);
+}
 const fs = require('./sources/frenchstream');
 app.get('/debug/fs', async (req, res) => {
   try {
