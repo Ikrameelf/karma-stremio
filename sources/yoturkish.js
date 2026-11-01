@@ -305,8 +305,8 @@ async function stream(id) {
 
 module.exports = {
   prefix: 'yot:',
-  catalogId: 'yoturkish',
-  catalogName: 'YoTurkish',
+  catalogId: 'yoturkish2',
+  catalogName: 'YoTurkish 2',
   types: ['series'],
   genres: Object.keys(GENRES),
   catalog, meta, stream,
