@@ -24,7 +24,7 @@ const withMeta = sources.filter((s) => s.meta);
 const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
-  id: 'community.karma.stremio',
+  id: 'community.karma.stremio.v2',
   version: '1.3.1',
   name: 'Karma',
   description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix).',
