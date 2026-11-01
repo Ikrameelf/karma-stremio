@@ -248,12 +248,6 @@ async function stream(id) {
         name: 'YoTurkish',
         title: i === 0 ? 'YouTube (chaîne officielle)' : `YouTube (autre vidéo ${i})`,
         ytId,
-        // Sous-titres YouTube (auto-générés et manuels) — disponibles si la vidéo en a.
-        subtitles: [
-          { id: `yt-${ytId}-en`, lang: 'eng', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=en&fmt=vtt` },
-          { id: `yt-${ytId}-en-asr`, lang: 'eng', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=en&kind=asr&fmt=vtt` },
-          { id: `yt-${ytId}-fr`, lang: 'fre', url: `https://www.youtube.com/api/timedtext?v=${ytId}&lang=fr&fmt=vtt` },
-        ],
       }));
   } catch (e) {
     console.log('YouTube :', e.response ? `HTTP ${e.response.status}` : e.message);
@@ -268,11 +262,8 @@ async function stream(id) {
   // Les sous-titres TurkVOST (VTT) sont aussi utiles pour les liens YouTube,
   // dont le lecteur interne n'affiche pas d'icône de sous-titres par défaut.
   const turkvostSubs = turkvostStreams.flatMap((s) => s.subtitles || []);
-  if (turkvostSubs.length) {
-    streams.forEach((s) => {
-      if (s.ytId) s.subtitles = [...(s.subtitles || []), ...turkvostSubs];
-    });
-  }
+  // Les sous-titres TurkVOST ne sont attachés qu'au flux MP4 direct,
+  // car le lecteur YouTube de Nuvio ne supporte pas les sous-titres externes.
   const seen = new Set();
   for (const url of candidates) {
     if (seen.has(url)) continue;
