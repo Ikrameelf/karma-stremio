@@ -47,7 +47,8 @@ function parseCards($) {
     const img = $(el).find('img').first();
     const poster = abs(img.attr('src') || img.attr('data-src'));
     const rating = ($(el).find('span.imdb').first().text().match(/[\d.]+/) || [])[0];
-    const id = 'yot:' + enc(pathOf(href));
+    // Suffixe de version pour forcer Nuvio à recharger les métadonnées (et passer aux IDs IMDb).
+    const id = 'yot:' + enc(pathOf(href)) + ':v2';
     if (!cards.has(id)) cards.set(id, { id, type: 'series', name: title.trim(), poster, imdbRating: rating });
   });
   return [...cards.values()];
@@ -70,7 +71,7 @@ async function catalog({ genre, search, skip = 0 }) {
 
 // ---------- Fiche série ----------
 async function meta(id) {
-  const path = dec(id.slice(4));
+  const path = dec(String(id).slice(4).split(':')[0]);
   const $ = cheerio.load(await getHtml(BASE + path));
 
   const name = $('h1').first().text().trim();
