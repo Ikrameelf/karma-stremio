@@ -95,11 +95,12 @@ function seriesName(collection) {
 }
 
 async function catalog(extra = {}) {
-  return Object.keys(SERIES).map((prefix) => ({
+  const items = Object.keys(SERIES).map((prefix) => ({
     id: `elisa:${prefix}`,
     type: 'series',
     name: seriesName(SERIES[prefix]),
   }));
+  return Promise.all(items.map((m) => tmdb.enrich(m)));
 }
 
 async function meta(id) {
