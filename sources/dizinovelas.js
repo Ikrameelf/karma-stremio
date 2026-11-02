@@ -3,11 +3,15 @@
 // Catalogue + fiches de séries ; flux lisibles en interne uniquement (url directe ou P2P).
 // Pas d'externalUrl : sur Android TV il n'y a pas de navigateur et l'appli plante.
 //
+// Chaîne de lecture trouvée dans les logs :
+//   page /watch/1/ -> api.chainnetv.top/series.php?...web-player-2 -> https://dizall.playerp2p.live/#ID
+// Le lecteur playerp2p.live charge la vidéo via son API (réponse chiffrée en hex).
+//
 // DEBUG = true : si aucun flux lisible n'est trouvé, l'addon affiche des lignes
-// « DEBUG » dans Stremio dont le titre décrit les pages traversées par le lecteur.
-// Ces lignes ne se lisent pas (elles pointent vers une URL factice) : elles servent
-// seulement à lire le titre. Mettre DEBUG = false une fois le problème réglé.
+// « DEBUG » dans Stremio dont le titre décrit ce qui a été trouvé. Ces lignes ne se
+// lisent pas (URL factice) : elles servent seulement à lire le titre.
 
+const crypto = require('crypto');
 const tmdb = require('./tmdb');
 
 const DEBUG = true;
@@ -23,15 +27,21 @@ const GENRES = [
   'Fantastique', 'Mystère', 'Romance', 'Soap',
 ];
 
+// Clé et IV AES-128-CBC supposés pour l'API des lecteurs de la famille playerp2p
+// (issus de ma mémoire de ce type de lecteur, NON vérifiés sur ton épisode : voir lignes DEBUG).
+const P2P_KEY = Buffer.from('kiemtienmua911ca');
+const P2P_IV = Buffer.from('1234567890oiuytr');
+
 // ---------- utilitaires ----------
 
-async function get(url, { referer = BASE + '/' } = {}) {
+async function get(url, { referer = BASE + '/', headers = {} } = {}) {
   const r = await fetch(url, {
     redirect: 'follow',
     headers: {
       'User-Agent': UA,
       'Accept-Language': 'fr-FR,fr;q=0.9',
       Referer: referer,
+      ...headers,
     },
   });
   if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
@@ -182,6 +192,10 @@ const IFRAME_RE = /<iframe[^>]+src=["']([^"']+)["']/gi;
 const HINT_RE =
   /atob\(|eval\(|webtorrent|\.torrent|magnet:|infohash|p2p|\.m3u8|\.mp4|jwplayer|hls|aes|crypto|fetch\(|xmlhttprequest|\$\.ajax|sources\s*:|file\s*:/gi;
 
+function debugItem(label, hints = [], snippet = '') {
+  return { kind: 'page', url: label, hints, hosts: [], snippet, size: 0 };
+}
+
 // Résume une page pour le debug : mots-clés trouvés, hôtes des scripts, début du contenu
 function describePage(url, html) {
   const hints = [...new Set([...html.matchAll(HINT_RE)].map((m) => m[0].toLowerCase()))].slice(0, 12);
@@ -227,11 +241,89 @@ async function resolvePage(url, referer, depth = 0) {
     try {
       out.push(...(await resolvePage(n, url, depth + 1)));
     } catch (e) {
-      out.push({ kind: 'page', url: n, hints: ['erreur: ' + e.message.slice(0, 60)], hosts: [], snippet: '', size: 0 });
+      out.push(debugItem(n, ['erreur: ' + e.message.slice(0, 60)]));
     }
   }
   return out;
 }
+
+// ---------- lecteur playerp2p.live ----------
+
+function p2pDecrypt(raw) {
+  const hex = String(raw).trim().replace(/^"|"$/g, '');
+  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 32 !== 0) throw new Error('réponse non hexadécimale');
+  const d = crypto.createDecipheriv('aes-128-cbc', P2P_KEY, P2P_IV);
+  return Buffer.concat([d.update(Buffer.from(hex, 'hex')), d.final()]).toString('utf8');
+}
+
+// Récupère les URL candidates (m3u8 / mp4 / champs source, hls, cf, file...) d'un texte JSON ou brut
+function p2pCandidates(text, origin) {
+  const urls = new Set();
+  const add = (v) => {
+    if (typeof v !== 'string') return;
+    let s = v.replace(/\\\//g, '/').trim();
+    if (s.startsWith('//')) s = 'https:' + s;
+    else if (s.startsWith('/')) s = origin + s;
+    if (/^https?:\/\//.test(s)) urls.add(s);
+  };
+  try {
+    const walk = (o, key = '') => {
+      if (typeof o === 'string') {
+        if (/^(source|hls|cf|file|url|stream|link|src|playlist)$/i.test(key) || /\.(m3u8|mp4)/i.test(o)) add(o);
+      } else if (Array.isArray(o)) o.forEach((x) => walk(x, key));
+      else if (o && typeof o === 'object') Object.entries(o).forEach(([k, v]) => walk(v, k));
+    };
+    walk(JSON.parse(text));
+  } catch (e) {
+    /* pas du JSON : on tente la regex */
+  }
+  for (const m of String(text).matchAll(MEDIA_RE)) add(m[0]);
+  return [...urls];
+}
+
+async function resolveP2P(pageUrl) {
+  const out = [];
+  let u;
+  try {
+    u = new URL(pageUrl);
+  } catch (e) {
+    return out;
+  }
+  const id = u.hash.replace(/^#/, '').split(/[&?]/)[0];
+  if (!id) {
+    out.push(debugItem('P2P : pas d\'identifiant dans ' + pageUrl));
+    return out;
+  }
+  const origin = u.origin;
+  const apis = [
+    `${origin}/api/v1/video?id=${id}&w=1920&h=1080&r=${encodeURIComponent(BASE + '/')}`,
+    `${origin}/api/v1/video?id=${id}&w=1920&h=1080&r=`,
+  ];
+  for (const api of apis) {
+    try {
+      const raw = await get(api, {
+        referer: pageUrl,
+        headers: { Origin: origin, Accept: '*/*' },
+      });
+      let text;
+      try {
+        text = p2pDecrypt(raw);
+      } catch (e) {
+        out.push(debugItem('P2P API ok mais déchiffrement raté : ' + e.message, [], String(raw).slice(0, 200)));
+        continue;
+      }
+      const cands = p2pCandidates(text, origin);
+      out.push(debugItem('P2P déchiffré, ' + cands.length + ' lien(s)', [], text.slice(0, 220)));
+      for (const c of cands) out.push({ kind: 'direct', url: c, referer: origin + '/', origin });
+      if (cands.length) break;
+    } catch (e) {
+      out.push(debugItem('P2P API erreur : ' + e.message.slice(0, 100)));
+    }
+  }
+  return out;
+}
+
+// ---------- flux Stremio ----------
 
 async function stream(id, type) {
   const parts = String(id).split(':');
@@ -247,20 +339,27 @@ async function stream(id, type) {
     if (m) {
       const chain = m[1].replace(/&amp;/g, '&');
       const found = await resolvePage(chain, watch);
+
+      // lecteur playerp2p.live : on interroge son API
+      const extra = [];
+      for (const f of found) {
+        if (f.kind === 'page' && /playerp2p\./i.test(f.url)) extra.push(...(await resolveP2P(f.url)));
+      }
+      found.push(...extra);
+
       const seen = new Set();
       for (const f of found) {
         const key = f.url || f.hash;
         if (seen.has(key)) continue;
         seen.add(key);
         if (f.kind === 'direct') {
+          const hdr = { Referer: f.referer, 'User-Agent': UA };
+          if (f.origin) hdr.Origin = f.origin;
           streams.push({
             name: 'Dizinovelas',
-            title: 'Lecteur direct',
+            title: /m3u8/i.test(f.url) ? 'Lecteur direct (HLS)' : 'Lecteur direct',
             url: f.url,
-            behaviorHints: {
-              notWebReady: true,
-              proxyHeaders: { request: { Referer: f.referer, 'User-Agent': UA } },
-            },
+            behaviorHints: { notWebReady: true, proxyHeaders: { request: hdr } },
           });
         } else if (f.kind === 'magnet') {
           const trackers = [...f.magnet.matchAll(/[?&]tr=([^&]+)/g)].map(
@@ -272,19 +371,19 @@ async function stream(id, type) {
         }
       }
     } else {
-      debug.push({ kind: 'page', url: 'lecteur chainnetv introuvable', hints: [], hosts: [], snippet: '', size: 0 });
+      debug.push(debugItem('lecteur chainnetv introuvable'));
       console.error('[dizinovelas] lecteur chainnetv introuvable sur', watch);
     }
   } catch (e) {
     console.error('[dizinovelas] stream échoué', e.message);
-    debug.push({ kind: 'page', url: 'erreur: ' + e.message.slice(0, 100), hints: [], hosts: [], snippet: '', size: 0 });
+    debug.push(debugItem('erreur: ' + e.message.slice(0, 100)));
   }
 
   console.error('[dizinovelas] debug:', JSON.stringify(debug));
 
-  // Aucun flux lisible : on affiche des lignes DEBUG (non lisibles, juste pour lire le titre)
+  // Aucun flux lisible : lignes DEBUG (non lisibles, juste pour lire le titre)
   if (DEBUG && !streams.length) {
-    debug.slice(0, 5).forEach((d, i) => {
+    debug.slice(-5).forEach((d, i) => {
       streams.push({
         name: `DEBUG ${i + 1}`,
         title:
