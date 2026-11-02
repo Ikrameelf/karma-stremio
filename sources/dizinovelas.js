@@ -157,12 +157,44 @@ async function meta(id) {
 
 // ---------- flux ----------
 
+const MEDIA_RE = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
+const IFRAME_RE = /<iframe[^>]+src=["']([^"']+)["']/gi;
+
+async function resolvePage(url, referer, depth = 0) {
+  if (depth > 3) return [];
+  const html = await get(url, { referer });
+  const out = [];
+
+  // 1) liens médias directs dans la page
+  for (const m of html.matchAll(MEDIA_RE)) {
+    out.push({ kind: 'direct', url: m[0].replace(/\\\//g, '/'), referer: url });
+  }
+  // 2) redirections JS ou iframes : on suit
+  const next = [];
+  const loc = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
+  if (loc) next.push(loc[1]);
+  for (const m of html.matchAll(IFRAME_RE)) next.push(m[1]);
+
+  for (let n of next) {
+    if (n.startsWith('//')) n = 'https:' + n;
+    if (!/^https?:/.test(n)) continue;
+    try {
+      out.push({ kind: 'page', url: n });
+      out.push(...(await resolvePage(n, url, depth + 1)));
+    } catch (e) {
+      /* on ignore */
+    }
+  }
+  return out;
+}
+
 async function stream(id, type) {
   const parts = String(id).split(':');
   if (parts.length < 3 || parts[1] !== 'ep') return [];
   const slug = parts.slice(2).join(':');
   const watch = `${BASE}/episodes/${slug}/watch/1/`;
   let externalUrl = watch;
+  const streams = [];
   try {
     const html = await get(watch);
     const m = html.match(/src='(https:\/\/api\.chainnetv\.top\/series\.php[^']*web-player-2[^']*)'/);
@@ -171,20 +203,35 @@ async function stream(id, type) {
       const page = await get(chain, { referer: watch });
       const mm = page.match(/window\.location\.href="([^"]+)"/);
       if (mm) externalUrl = mm[1];
+
+      const found = await resolvePage(chain, watch);
+      const seen = new Set();
+      for (const f of found) {
+        if (seen.has(f.url)) continue;
+        seen.add(f.url);
+        if (f.kind === 'direct') {
+          streams.push({
+            name: 'Dizinovelas',
+            title: 'Lecteur direct',
+            url: f.url,
+            behaviorHints: {
+              notWebReady: true,
+              proxyHeaders: { request: { Referer: f.referer, 'User-Agent': UA } },
+            },
+          });
+        } else {
+          // DEBUG : affiche les pages traversées pour voir l'hébergeur
+          streams.push({
+            name: 'Dizinovelas (debug)',
+            title: f.url.slice(0, 120),
+            externalUrl: f.url,
+          });
+        }
+      }
     }
   } catch (e) {
     console.error('[dizinovelas] stream échoué', e.message);
   }
-  return [{ name: 'Dizinovelas', title: 'Ouvrir dans le navigateur', externalUrl }];
+  streams.push({ name: 'Dizinovelas', title: 'Ouvrir dans le navigateur', externalUrl });
+  return streams;
 }
-
-module.exports = {
-  prefix: 'dizinovelas:',
-  types: ['series'],
-  catalogId: 'dizinovelas',
-  catalogName: 'Dizinovelas',
-  genres: GENRES,
-  catalog,
-  meta,
-  stream,
-};
