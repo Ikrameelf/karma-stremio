@@ -28,7 +28,7 @@ const manifest = {
   id: 'community.karma.stremio.v2',
   version: '1.3.2',
   name: 'Karma',
-  description: 'Addon Stremio multi-sources : YoTurkish, Movix, Coflix et Elisa's Addictions.',
+  description: "Addon Stremio multi-sources : YoTurkish, Movix, Coflix et Elisa's Addictions.",
   types: ['movie', 'series'],
   resources: [
     'catalog',
