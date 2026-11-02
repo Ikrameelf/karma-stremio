@@ -26,7 +26,7 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.3.2',
+  version: '1.3.3',
   name: 'Karma',
   description: "Addon Stremio multi-sources : YoTurkish, Movix, Coflix et Elisa's Addictions.",
   types: ['movie', 'series'],
