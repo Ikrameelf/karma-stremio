@@ -1,45 +1,63 @@
-// sources/elisasaddictions.js
+﻿// sources/elisasaddictions.js
 // Flux directs Elisa's Addictions (worker MP4) pour l'addon karma.
 // Les URLs directes sont publiques mais leur chemin (dossier/abreviation) varie par serie.
 // On les derive du nom de collection Wix (PascalCase) : dossier = nom avec espaces,
 // abreviation = initiales (ou nom complet si un seul mot).
 
 const SERIES = {
-  'banasevmeyianlat': 'BanaSevmeyiAnlat',
-  'carpisma-1': 'Carpisma',
-  'reaksiyon-1': 'Reaksiyon',
-  'calikusu': 'Calikusu',
   'askintarifi': 'AskinTarifi',
-  'bayyanlis': 'BayYanlis',
-  'ada-masali': 'AdaMasali',
-  'guvercin-1': 'Guvercin',
-  'dolunay-1': 'Dolunay',
-  'muhtesem-ikili': 'MuhtesemIkili',
+  'reaksiyon-1': 'Reaksiyon',
   'erkenci-kus': 'ErkenciKus',
-  'seref-meselesi': 'SerefMeselesi',
-  'uyanis-buyuk-selcuklu': 'UyanisBuyukSelcuklu',
-  'inadinaask': 'InadinaAsk',
-  'yabani-1': 'Yabani',
-  'siyah-inci': 'SiyahInci',
   'tatli-intikam': 'TatliIntikam',
-  'birkucukgunisigi': 'BirKucukGunIsigi',
-  'kurulusosman': 'KurulusOsman',
-  'hercai-1': 'Hercai',
-  'alev-alev': 'AlevAlev',
-  'yalicapkini': 'YaliCapkini',
   'adizehra': 'AdiZehra',
-  'meryem-1': 'Meryem',
-  'hudutsuz-sevda': 'HudutsuzSevda',
-  'bahtoyunu': 'AskinTarifi1',
-  'her-yerde-sen': 'HerYerdeSen',
-  'asklaftananlamaz': 'AskLaftanAnlamaz',
-  'sol-yanim': 'SolYanim',
+  'kurulusosman': 'KurulusOsman',
+  'yabani-1': 'Yabani',
   'atesbocegi': 'Atesbocegi',
-  'akinci': 'Akinci',
+  'hudutsuz-sevda': 'HudutsuzSevda',
+  'guvercin-1': 'Guvercin',
+  'siyah-inci': 'SiyahInci',
+  'asklaftananlamaz': 'AskLaftanAnlamaz',
   'sen-cal-kapimi': 'SenCalKapimi',
-  'senden-daha-guzel': 'SendenDahaGuzel',
-  'babamingunahlari': 'BabaminGunahlari1',
+  'hercai-1': 'Hercai',
+  'her-yerde-sen': 'HerYerdeSen',
+  'uyanis-buyuk-selcuklu': 'UyanisBuyukSelcuklu',
+  'ada-masali': 'AdaMasali',
+  'banasevmeyianlat': 'BanaSevmeyiAnlat',
+  'alev-alev': 'AlevAlev',
+  'meryem-1': 'Meryem',
+  'muhtesem-ikili': 'MuhtesemIkili',
+  'dolunay-1': 'Dolunay',
+  'akinci': 'Akinci',
   'adimfarah': 'AdimFarah',
+  'seref-meselesi': 'SerefMeselesi',
+};
+
+const FILES = {
+  'askintarifi': 'AT',
+  'reaksiyon-1': 'Reaksiyon',
+  'erkenci-kus': 'EK',
+  'tatli-intikam': 'TatliIntikam',
+  'adizehra': 'AZ',
+  'kurulusosman': 'KO',
+  'yabani-1': 'Yabani',
+  'atesbocegi': 'Atesbocegi',
+  'hudutsuz-sevda': 'HudutsuzSevda',
+  'guvercin-1': 'Guvercin',
+  'siyah-inci': 'SiyahInci',
+  'asklaftananlamaz': 'ALA',
+  'sen-cal-kapimi': 'SCK',
+  'hercai-1': 'Hercai',
+  'her-yerde-sen': 'HYS',
+  'uyanis-buyuk-selcuklu': 'UBS',
+  'ada-masali': 'AdaMasali',
+  'banasevmeyianlat': 'BSA',
+  'alev-alev': 'AlevAlev',
+  'meryem-1': 'Meryem',
+  'muhtesem-ikili': 'MuhtesemIkili',
+  'dolunay-1': 'Dolunay',
+  'akinci': 'Akinci',
+  'adimfarah': 'AF',
+  'seref-meselesi': 'SerefMeselesi',
 };
 
 function splitPascal(s) {
@@ -58,8 +76,10 @@ function folderAndAbbr(collection) {
   return { folder, abbr };
 }
 
-function buildStreamUrl(collection, epNum) {
-  const { folder, abbr } = folderAndAbbr(collection);
+function buildStreamUrl(prefix, collection, epNum) {
+  const abbr = FILES[prefix];
+  const words = splitPascal(collection);
+  const folder = words.join(' ');
   const n = String(epNum).padStart(2, '0');
   const folderEnc = encodeURIComponent(folder).replace(/%20/g, '+');
   return `https://streaming.elisasaddictions.workers.dev/file/ElisasAddictions/${folderEnc}/${abbr}_VOSTFR_${n}.mp4`;
@@ -86,7 +106,7 @@ async function meta(id) {
   for (let n = 1; n <= 200; n++) {
     videos.push({
       id: `elisa:${prefix}:${n}`,
-      title: `Épisode ${n}`,
+      title: `Ã‰pisode ${n}`,
       season: 1,
       episode: n,
     });
@@ -114,7 +134,7 @@ async function stream(id, type) {
     return [];
   }
 
-  const url = buildStreamUrl(collection, epNum);
+  const url = buildStreamUrl(prefix, collection, epNum);
   console.log(`Elisa ${prefix} ep ${epNum} -> ${url}`);
   return [
     {
@@ -135,3 +155,4 @@ module.exports = {
   meta,
   stream,
 };
+
