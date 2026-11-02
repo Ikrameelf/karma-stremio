@@ -3,7 +3,7 @@
 // Catalogue + fiches de séries ; flux lisibles en interne uniquement (url directe ou P2P).
 // Pas d'externalUrl : sur Android TV il n'y a pas de navigateur et l'appli plante.
 //
-// Chaîne de lecture trouvée dans les logs :
+// Chaîne de lecture (vue dans les logs) :
 //   page /watch/1/ -> api.chainnetv.top/series.php?...web-player-2 -> https://dizall.playerp2p.live/#ID
 // Le lecteur playerp2p.live charge la vidéo via son API (réponse chiffrée en hex).
 //
@@ -28,7 +28,7 @@ const GENRES = [
 ];
 
 // Clé et IV AES-128-CBC supposés pour l'API des lecteurs de la famille playerp2p
-// (issus de ma mémoire de ce type de lecteur, NON vérifiés sur ton épisode : voir lignes DEBUG).
+// (issus de ma mémoire de ce type de lecteur, NON vérifiés : voir les lignes DEBUG).
 const P2P_KEY = Buffer.from('kiemtienmua911ca');
 const P2P_IV = Buffer.from('1234567890oiuytr');
 
@@ -44,7 +44,13 @@ async function get(url, { referer = BASE + '/', headers = {} } = {}) {
       ...headers,
     },
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    const err = new Error(`HTTP ${r.status} ${url}`);
+    err.status = r.status;
+    err.body = body.slice(0, 200);
+    throw err;
+  }
   return r.text();
 }
 
@@ -193,7 +199,7 @@ const HINT_RE =
   /atob\(|eval\(|webtorrent|\.torrent|magnet:|infohash|p2p|\.m3u8|\.mp4|jwplayer|hls|aes|crypto|fetch\(|xmlhttprequest|\$\.ajax|sources\s*:|file\s*:/gi;
 
 function debugItem(label, hints = [], snippet = '') {
-  return { kind: 'page', url: label, hints, hosts: [], snippet, size: 0 };
+  return { kind: 'page', url: label, hints, hosts: [], snippet: String(snippet).slice(0, 420), size: 0 };
 }
 
 // Résume une page pour le debug : mots-clés trouvés, hôtes des scripts, début du contenu
@@ -281,6 +287,49 @@ function p2pCandidates(text, origin) {
   return [...urls];
 }
 
+// Lit le script du lecteur pour trouver le vrai appel d'API et la clé de déchiffrement
+async function inspectP2PBundle(pageUrl) {
+  const out = [];
+  try {
+    const origin = new URL(pageUrl).origin;
+    const html = await get(origin + '/', { referer: BASE + '/' });
+    const srcs = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)]
+      .map((m) => {
+        try {
+          return new URL(m[1], origin + '/').href;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((s) => s && s.startsWith(origin));
+    out.push(debugItem('BUNDLE scripts', [], srcs.join(' | ')));
+
+    for (const src of srcs.slice(0, 3)) {
+      let js;
+      try {
+        js = await get(src, { referer: origin + '/' });
+      } catch (e) {
+        out.push(debugItem('BUNDLE erreur ' + src.slice(-40), [], e.message));
+        continue;
+      }
+      const apis = [...new Set([...js.matchAll(/["'`](\/?api\/[A-Za-z0-9_\/.-]+)/g)].map((m) => m[1]))].slice(0, 10);
+      out.push(debugItem('BUNDLE api (' + js.length + ' o)', [], apis.join(' | ') || '-'));
+
+      const i = js.search(/api\/v1\/video/);
+      if (i >= 0) out.push(debugItem('BUNDLE appel video', [], js.slice(Math.max(0, i - 120), i + 300)));
+
+      const k = js.search(/createDecipheriv|CryptoJS|AES|decrypt/);
+      if (k >= 0) out.push(debugItem('BUNDLE chiffrement', [], js.slice(Math.max(0, k - 150), k + 270)));
+
+      const strs = [...new Set([...js.matchAll(/["']([A-Za-z0-9]{16})["']/g)].map((m) => m[1]))].slice(0, 8);
+      out.push(debugItem('BUNDLE chaînes de 16 car.', [], strs.join(' | ') || '-'));
+    }
+  } catch (e) {
+    out.push(debugItem('BUNDLE inspection ratée', [], e.message));
+  }
+  return out;
+}
+
 async function resolveP2P(pageUrl) {
   const out = [];
   let u;
@@ -291,14 +340,16 @@ async function resolveP2P(pageUrl) {
   }
   const id = u.hash.replace(/^#/, '').split(/[&?]/)[0];
   if (!id) {
-    out.push(debugItem('P2P : pas d\'identifiant dans ' + pageUrl));
+    out.push(debugItem("P2P : pas d'identifiant dans " + pageUrl));
     return out;
   }
   const origin = u.origin;
   const apis = [
     `${origin}/api/v1/video?id=${id}&w=1920&h=1080&r=${encodeURIComponent(BASE + '/')}`,
     `${origin}/api/v1/video?id=${id}&w=1920&h=1080&r=`,
+    `${origin}/api/v1/video?id=${id}`,
   ];
+  let ok = false;
   for (const api of apis) {
     try {
       const raw = await get(api, {
@@ -309,17 +360,21 @@ async function resolveP2P(pageUrl) {
       try {
         text = p2pDecrypt(raw);
       } catch (e) {
-        out.push(debugItem('P2P API ok mais déchiffrement raté : ' + e.message, [], String(raw).slice(0, 200)));
+        out.push(debugItem('P2P API ok mais déchiffrement raté : ' + e.message, [], String(raw).slice(0, 300)));
         continue;
       }
       const cands = p2pCandidates(text, origin);
-      out.push(debugItem('P2P déchiffré, ' + cands.length + ' lien(s)', [], text.slice(0, 220)));
+      out.push(debugItem('P2P déchiffré, ' + cands.length + ' lien(s)', [], text.slice(0, 300)));
       for (const c of cands) out.push({ kind: 'direct', url: c, referer: origin + '/', origin });
-      if (cands.length) break;
+      if (cands.length) {
+        ok = true;
+        break;
+      }
     } catch (e) {
-      out.push(debugItem('P2P API erreur : ' + e.message.slice(0, 100)));
+      out.push(debugItem('P2P API erreur ' + (e.status || '') + ' : ' + api.slice(origin.length, origin.length + 60), [], e.body || e.message));
     }
   }
+  if (!ok) out.push(...(await inspectP2PBundle(pageUrl)));
   return out;
 }
 
@@ -383,7 +438,7 @@ async function stream(id, type) {
 
   // Aucun flux lisible : lignes DEBUG (non lisibles, juste pour lire le titre)
   if (DEBUG && !streams.length) {
-    debug.slice(-5).forEach((d, i) => {
+    debug.slice(-7).forEach((d, i) => {
       streams.push({
         name: `DEBUG ${i + 1}`,
         title:
