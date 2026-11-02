@@ -11,6 +11,8 @@ const SERIES = {
   'erkenci-kus': 'ErkenciKus',
   'tatli-intikam': 'TatliIntikam',
   'adizehra': 'AdiZehra',
+  'sol-yanim': 'SolYanim',
+  'bayyanlis': 'BayYanlis',
   'kurulusosman': 'KurulusOsman',
   'yabani-1': 'Yabani',
   'atesbocegi': 'Atesbocegi',
@@ -19,8 +21,10 @@ const SERIES = {
   'siyah-inci': 'SiyahInci',
   'asklaftananlamaz': 'AskLaftanAnlamaz',
   'sen-cal-kapimi': 'SenCalKapimi',
+  'senden-daha-guzel': 'SendenDahaGuzel',
   'hercai-1': 'Hercai',
   'her-yerde-sen': 'HerYerdeSen',
+  'bahtoyunu': 'AskinTarifi1',
   'uyanis-buyuk-selcuklu': 'UyanisBuyukSelcuklu',
   'ada-masali': 'AdaMasali',
   'banasevmeyianlat': 'BanaSevmeyiAnlat',
@@ -28,9 +32,15 @@ const SERIES = {
   'meryem-1': 'Meryem',
   'muhtesem-ikili': 'MuhtesemIkili',
   'dolunay-1': 'Dolunay',
+  'yalicapkini': 'YaliCapkini',
   'akinci': 'Akinci',
   'adimfarah': 'AdimFarah',
+  'inadinaask': 'InadinaAsk',
+  'carpisma-1': 'Carpisma',
+  'birkucukgunisigi': 'BirKucukGunIsigi',
   'seref-meselesi': 'SerefMeselesi',
+  'calikusu': 'Calikusu',
+  'babamingunahlari': 'BabaminGunahlari1',
 };
 
 // Liens externes manuels : clé = "prefix:epNum", valeur = tableau d'URLs.
@@ -82,7 +92,7 @@ function folderAndAbbr(collection) {
 }
 
 function buildStreamUrl(prefix, collection, epNum) {
-  const abbr = FILES[prefix];
+  const abbr = FILES[prefix] || collection;
   const words = splitPascal(collection);
   const folder = words.join(' ');
   const n = String(epNum).padStart(2, '0');
@@ -172,4 +182,5 @@ module.exports = {
   meta,
   stream,
 };
+
 
