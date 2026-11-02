@@ -65,6 +65,40 @@ function buildStreamUrl(collection, epNum) {
   return `https://streaming.elisasaddictions.workers.dev/file/ElisasAddictions/${folderEnc}/${abbr}_VOSTFR_${n}.mp4`;
 }
 
+function seriesName(collection) {
+  return splitPascal(collection).join(' ');
+}
+
+async function catalog(extra = {}) {
+  return Object.keys(SERIES).map((prefix) => ({
+    id: `elisa:${prefix}`,
+    type: 'series',
+    name: seriesName(SERIES[prefix]),
+  }));
+}
+
+async function meta(id) {
+  const prefix = String(id).split(':')[1];
+  const collection = SERIES[prefix];
+  if (!collection) return null;
+  const name = seriesName(collection);
+  const videos = [];
+  for (let n = 1; n <= 200; n++) {
+    videos.push({
+      id: `elisa:${prefix}:${n}`,
+      title: `Épisode ${n}`,
+      season: 1,
+      episode: n,
+    });
+  }
+  return {
+    id,
+    type: 'series',
+    name,
+    videos,
+  };
+}
+
 async function stream(id, type) {
   // Format attendu : elisa:<prefix-site>:<numero-episode>
   // ex: elisa:hercai-1:12
@@ -95,5 +129,9 @@ async function stream(id, type) {
 module.exports = {
   prefix: 'elisa:',
   types: ['series'],
+  catalogId: 'elisa',
+  catalogName: "Elisa's Addictions",
+  catalog,
+  meta,
   stream,
 };
