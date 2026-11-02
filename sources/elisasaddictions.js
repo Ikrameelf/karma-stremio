@@ -32,6 +32,10 @@ const SERIES = {
   'seref-meselesi': 'SerefMeselesi',
 };
 
+// Liens externes manuels : clé = "prefix:epNum", valeur = tableau d'URLs.
+// Exemple : 'hercai-1:1': ['https://vidmoly.me/v/xxxx', 'https://mega.nz/file/...']
+const EXTRA = {};
+
 const FILES = {
   'askintarifi': 'AT',
   'reaksiyon-1': 'Reaksiyon',
@@ -136,7 +140,7 @@ async function stream(id, type) {
 
   const url = buildStreamUrl(prefix, collection, epNum);
   console.log(`Elisa ${prefix} ep ${epNum} -> ${url}`);
-  return [
+  const out = [
     {
       name: "Elisa's Addictions",
       title: `Elisa's Addictions VOSTFR (MP4)`,
@@ -144,6 +148,16 @@ async function stream(id, type) {
       behaviorHints: { notWebReady: true },
     },
   ];
+  const extra = EXTRA[`${prefix}:${epNum}`] || [];
+  for (const u of extra) {
+    out.push({
+      name: "Elisa's Addictions",
+      title: `Lien externe`,
+      url: u,
+      behaviorHints: { notWebReady: true },
+    });
+  }
+  return out;
 }
 
 module.exports = {
