@@ -18,6 +18,7 @@ const sources = [
   require('./sources/coflix'),
   require('./sources/dulourd'),
   require('./sources/vidzy'),
+  require('./sources/elisasaddictions'),
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
@@ -25,9 +26,9 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.3.1',
+  version: '1.3.2',
   name: 'Karma',
-  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix).',
+  description: 'Addon Stremio multi-sources : YoTurkish, Movix, Coflix et Elisa's Addictions.',
   types: ['movie', 'series'],
   resources: [
     'catalog',
