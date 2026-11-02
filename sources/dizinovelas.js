@@ -1,26 +1,17 @@
 // sources/dizinovelas.js
 // Source Dizinovelas (site WordPress, thème ZetaFlix) pour l'addon karma.
-// Catalogue + fiches de séries ; flux lisibles en interne uniquement (url directe ou P2P).
-// Pas d'externalUrl : sur Android TV il n'y a pas de navigateur et l'appli plante.
+// Catalogue + fiches de séries. Les flux ne sont renvoyés que s'ils sont lisibles en interne
+// (lien direct .m3u8/.mp4 ou magnet). Aucun externalUrl : sur Android TV il n'y a pas de
+// navigateur et l'appli plante.
 //
-// Chaîne de lecture (vue dans les logs) :
-//   page /watch/1/ -> api.chainnetv.top/series.php?...web-player-2 -> https://dizall.playerp2p.live/#ID
-// Le lecteur playerp2p.live charge la vidéo via /api/v1/video?id=ID (réponse chiffrée en hex).
-// Le serveur répond « player is not recognized » : il vérifie d'où vient la demande (paramètre r
-// et en-tête Referer). On essaie donc plusieurs origines plausibles (la page qui intègre le lecteur).
-//
-// DEBUG = true : si aucun flux lisible n'est trouvé, l'addon affiche des lignes
-// « DEBUG » dans Stremio dont le titre décrit ce qui a été trouvé. Ces lignes ne se
-// lisent pas (URL factice) : elles servent seulement à lire le titre.
+// État connu : le lecteur du site passe par https://<xxx>.playerp2p.live/#ID, dont l'API
+// (/api/v1/video) refuse les appels extérieurs (« player is not recognized ») et dont la clé
+// de déchiffrement est calculée dans le navigateur. Sans lien direct ni magnet dans les pages,
+// aucun flux n'est donc proposé pour ces épisodes.
 
-const crypto = require('crypto');
 const tmdb = require('./tmdb');
 
-const DEBUG = true;
-const DEBUG_URL = 'https://karma-stremio.onrender.com/debug-dizinovelas';
-
 const BASE = 'https://www.dizinovelas.com';
-const CHAIN_ORIGIN = 'https://api.chainnetv.top';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const PAGE_SIZE = 30;
@@ -30,28 +21,18 @@ const GENRES = [
   'Fantastique', 'Mystère', 'Romance', 'Soap',
 ];
 
-// Clé et IV AES-128-CBC supposés pour l'API des lecteurs de la famille playerp2p
-// (issus de ma mémoire de ce type de lecteur, NON vérifiés : voir les lignes DEBUG).
-const P2P_KEY = Buffer.from('kiemtienmua911ca');
-const P2P_IV = Buffer.from('1234567890oiuytr');
-
 // ---------- utilitaires ----------
 
-async function get(url, { referer = BASE + '/', headers = {} } = {}) {
-  const h = {
-    'User-Agent': UA,
-    'Accept-Language': 'fr-FR,fr;q=0.9',
-    ...headers,
-  };
-  if (referer) h.Referer = referer;
-  const r = await fetch(url, { redirect: 'follow', headers: h });
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    const err = new Error(`HTTP ${r.status} ${url}`);
-    err.status = r.status;
-    err.body = body.slice(0, 200);
-    throw err;
-  }
+async function get(url, { referer = BASE + '/' } = {}) {
+  const r = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': UA,
+      'Accept-Language': 'fr-FR,fr;q=0.9',
+      Referer: referer,
+    },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
   return r.text();
 }
 
@@ -196,47 +177,20 @@ async function meta(id) {
 const MEDIA_RE = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
 const MAGNET_RE = /magnet:\?xt=urn:btih:([a-fA-F0-9]{40})[^\s"'<>]*/gi;
 const IFRAME_RE = /<iframe[^>]+src=["']([^"']+)["']/gi;
-const HINT_RE =
-  /atob\(|eval\(|webtorrent|\.torrent|magnet:|infohash|p2p|\.m3u8|\.mp4|jwplayer|hls|aes|crypto|fetch\(|xmlhttprequest|\$\.ajax|sources\s*:|file\s*:/gi;
 
-function debugItem(label, hints = [], snippet = '') {
-  return { kind: 'page', url: label, hints, hosts: [], snippet: String(snippet).slice(0, 420), size: 0 };
-}
-
-// Résume une page pour le debug : mots-clés trouvés, hôtes des scripts, début du contenu
-function describePage(url, html) {
-  const hints = [...new Set([...html.matchAll(HINT_RE)].map((m) => m[0].toLowerCase()))].slice(0, 12);
-  const hosts = [
-    ...new Set(
-      [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map((m) => {
-        try {
-          return new URL(m[1], url).host;
-        } catch (e) {
-          return '?';
-        }
-      })
-    ),
-  ].slice(0, 6);
-  const snippet = html.replace(/\s+/g, ' ').slice(0, 220);
-  return { kind: 'page', url, hints, hosts, snippet, size: html.length };
-}
-
+// Suit le lecteur (redirections JS, iframes) et collecte liens directs et magnets
 async function resolvePage(url, referer, depth = 0) {
   if (depth > 3) return [];
   const html = await get(url, { referer });
-  const out = [describePage(url, html)];
+  const out = [];
 
-  // 1) liens médias directs dans la page
   for (const m of html.matchAll(MEDIA_RE)) {
     out.push({ kind: 'direct', url: m[0].replace(/\\\//g, '/'), referer: url });
   }
-
-  // 2) liens magnet (P2P)
   for (const m of html.matchAll(MAGNET_RE)) {
     out.push({ kind: 'magnet', hash: m[1].toLowerCase(), magnet: m[0] });
   }
 
-  // 3) redirections JS ou iframes : on suit
   const next = [];
   const loc = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
   if (loc) next.push(loc[1]);
@@ -248,159 +202,11 @@ async function resolvePage(url, referer, depth = 0) {
     try {
       out.push(...(await resolvePage(n, url, depth + 1)));
     } catch (e) {
-      out.push(debugItem(n, ['erreur: ' + e.message.slice(0, 60)]));
+      /* page inaccessible : on ignore */
     }
   }
   return out;
 }
-
-// ---------- lecteur playerp2p.live ----------
-
-function p2pDecrypt(raw) {
-  const hex = String(raw).trim().replace(/^"|"$/g, '');
-  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 32 !== 0) throw new Error('réponse non hexadécimale');
-  const d = crypto.createDecipheriv('aes-128-cbc', P2P_KEY, P2P_IV);
-  return Buffer.concat([d.update(Buffer.from(hex, 'hex')), d.final()]).toString('utf8');
-}
-
-// Récupère les URL candidates (m3u8 / mp4 / champs source, hls, cf, file...) d'un texte JSON ou brut
-function p2pCandidates(text, origin) {
-  const urls = new Set();
-  const add = (v) => {
-    if (typeof v !== 'string') return;
-    let s = v.replace(/\\\//g, '/').trim();
-    if (s.startsWith('//')) s = 'https:' + s;
-    else if (s.startsWith('/')) s = origin + s;
-    if (/^https?:\/\//.test(s)) urls.add(s);
-  };
-  try {
-    const walk = (o, key = '') => {
-      if (typeof o === 'string') {
-        if (/^(source|hls|cf|file|url|stream|link|src|playlist)$/i.test(key) || /\.(m3u8|mp4)/i.test(o)) add(o);
-      } else if (Array.isArray(o)) o.forEach((x) => walk(x, key));
-      else if (o && typeof o === 'object') Object.entries(o).forEach(([k, v]) => walk(v, k));
-    };
-    walk(JSON.parse(text));
-  } catch (e) {
-    /* pas du JSON : on tente la regex */
-  }
-  for (const m of String(text).matchAll(MEDIA_RE)) add(m[0]);
-  return [...urls];
-}
-
-const around = (js, i, before, after) => js.slice(Math.max(0, i - before), i + after);
-
-// Lit le script du lecteur pour trouver le vrai appel d'API et la clé de déchiffrement
-async function inspectP2PBundle(pageUrl) {
-  const out = [];
-  try {
-    const origin = new URL(pageUrl).origin;
-    const html = await get(origin + '/', { referer: CHAIN_ORIGIN + '/' });
-    const srcs = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)]
-      .map((m) => {
-        try {
-          return new URL(m[1], origin + '/').href;
-        } catch (e) {
-          return null;
-        }
-      })
-      .filter((s) => s && s.startsWith(origin));
-
-    for (const src of srcs.slice(0, 2)) {
-      let js;
-      try {
-        js = await get(src, { referer: origin + '/' });
-      } catch (e) {
-        out.push(debugItem('BUNDLE erreur', [], e.message));
-        continue;
-      }
-
-      // définitions des fonctions F (clé) et J (iv) utilisées par le chiffrement AES-CBC
-      const defs = [...js.matchAll(/(?:^|[,;{}\s])(F|J)=(?:\(\)=>|function\s*\(\))/g)].slice(0, 4);
-      for (const d of defs) out.push(debugItem('BUNDLE def ' + d[1], [], around(js, d.index + 1, 0, 300)));
-      if (!defs.length) out.push(debugItem('BUNDLE def F/J : introuvables'));
-
-      // construction de l'URL de l'API (paramètres w, h, r...)
-      let n = 0;
-      for (const m of js.matchAll(/&w=|&r=|[?&]r=|"&h="/g)) {
-        out.push(debugItem('BUNDLE param ' + m[0], [], around(js, m.index, 180, 260)));
-        if (++n >= 2) break;
-      }
-
-      // où le résultat chiffré est utilisé (fonction ce)
-      const c = js.search(/ce=async/);
-      if (c >= 0) out.push(debugItem('BUNDLE ce()', [], around(js, c, 0, 420)));
-
-      // appels à /api/v1/player et /api/v1/info (peuvent « reconnaître » le lecteur)
-      for (const key of ['api/v1/player', 'api/v1/info']) {
-        const k = js.indexOf(key);
-        if (k >= 0) out.push(debugItem('BUNDLE ' + key, [], around(js, k, 60, 300)));
-      }
-    }
-  } catch (e) {
-    out.push(debugItem('BUNDLE inspection ratée', [], e.message));
-  }
-  return out;
-}
-
-async function resolveP2P(pageUrl) {
-  const out = [];
-  let u;
-  try {
-    u = new URL(pageUrl);
-  } catch (e) {
-    return out;
-  }
-  const id = u.hash.replace(/^#/, '').split(/[&?]/)[0];
-  if (!id) {
-    out.push(debugItem("P2P : pas d'identifiant dans " + pageUrl));
-    return out;
-  }
-  const origin = u.origin;
-
-  // Le serveur dit « player is not recognized » : on essaie plusieurs origines
-  // (la page qui intègre le lecteur) pour le paramètre r et l'en-tête Referer.
-  const variants = [
-    { r: CHAIN_ORIGIN + '/', referer: CHAIN_ORIGIN + '/' },
-    { r: CHAIN_ORIGIN, referer: CHAIN_ORIGIN + '/' },
-    { r: BASE + '/', referer: BASE + '/' },
-    { r: '', referer: CHAIN_ORIGIN + '/' },
-    { r: origin + '/', referer: origin + '/' },
-  ];
-
-  let ok = false;
-  let tries = 0;
-  for (const v of variants) {
-    const api = `${origin}/api/v1/video?id=${id}&w=1920&h=1080&r=${encodeURIComponent(v.r)}`;
-    tries++;
-    try {
-      const raw = await get(api, {
-        referer: v.referer,
-        headers: { Origin: new URL(v.referer).origin, Accept: '*/*' },
-      });
-      let text;
-      try {
-        text = p2pDecrypt(raw);
-      } catch (e) {
-        out.push(debugItem('P2P r=' + (v.r || '(vide)') + ' : déchiffrement raté (' + e.message + ')', [], String(raw).slice(0, 300)));
-        continue;
-      }
-      const cands = p2pCandidates(text, origin);
-      out.push(debugItem('P2P r=' + (v.r || '(vide)') + ' : déchiffré, ' + cands.length + ' lien(s)', [], text.slice(0, 300)));
-      for (const c of cands) out.push({ kind: 'direct', url: c, referer: origin + '/', origin });
-      if (cands.length) {
-        ok = true;
-        break;
-      }
-    } catch (e) {
-      out.push(debugItem('P2P r=' + (v.r || '(vide)') + ' erreur ' + (e.status || ''), [], e.body || e.message));
-    }
-  }
-  if (!ok) out.push(...(await inspectP2PBundle(pageUrl)));
-  return out;
-}
-
-// ---------- flux Stremio ----------
 
 async function stream(id, type) {
   const parts = String(id).split(':');
@@ -408,69 +214,37 @@ async function stream(id, type) {
   const slug = parts.slice(2).join(':');
   const watch = `${BASE}/episodes/${slug}/watch/1/`;
   const streams = [];
-  const debug = [];
   try {
     const html = await get(watch);
-    debug.push(describePage(watch, html));
     const m = html.match(/src='(https:\/\/api\.chainnetv\.top\/series\.php[^']*web-player-2[^']*)'/);
-    if (m) {
-      const chain = m[1].replace(/&amp;/g, '&');
-      const found = await resolvePage(chain, watch);
+    if (!m) return [];
+    const chain = m[1].replace(/&amp;/g, '&');
+    const found = await resolvePage(chain, watch);
 
-      // lecteur playerp2p.live : on interroge son API
-      const extra = [];
-      for (const f of found) {
-        if (f.kind === 'page' && /playerp2p\./i.test(f.url)) extra.push(...(await resolveP2P(f.url)));
+    const seen = new Set();
+    for (const f of found) {
+      const key = f.url || f.hash;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (f.kind === 'direct') {
+        streams.push({
+          name: 'Dizinovelas',
+          title: /m3u8/i.test(f.url) ? 'Lecteur direct (HLS)' : 'Lecteur direct',
+          url: f.url,
+          behaviorHints: {
+            notWebReady: true,
+            proxyHeaders: { request: { Referer: f.referer, 'User-Agent': UA } },
+          },
+        });
+      } else if (f.kind === 'magnet') {
+        const trackers = [...f.magnet.matchAll(/[?&]tr=([^&]+)/g)].map(
+          (t) => 'tracker:' + decodeURIComponent(t[1])
+        );
+        streams.push({ name: 'Dizinovelas', title: 'P2P', infoHash: f.hash, sources: trackers });
       }
-      found.push(...extra);
-
-      const seen = new Set();
-      for (const f of found) {
-        const key = f.url || f.hash;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        if (f.kind === 'direct') {
-          const hdr = { Referer: f.referer, 'User-Agent': UA };
-          if (f.origin) hdr.Origin = f.origin;
-          streams.push({
-            name: 'Dizinovelas',
-            title: /m3u8/i.test(f.url) ? 'Lecteur direct (HLS)' : 'Lecteur direct',
-            url: f.url,
-            behaviorHints: { notWebReady: true, proxyHeaders: { request: hdr } },
-          });
-        } else if (f.kind === 'magnet') {
-          const trackers = [...f.magnet.matchAll(/[?&]tr=([^&]+)/g)].map(
-            (t) => 'tracker:' + decodeURIComponent(t[1])
-          );
-          streams.push({ name: 'Dizinovelas', title: 'P2P', infoHash: f.hash, sources: trackers });
-        } else {
-          debug.push(f);
-        }
-      }
-    } else {
-      debug.push(debugItem('lecteur chainnetv introuvable'));
-      console.error('[dizinovelas] lecteur chainnetv introuvable sur', watch);
     }
   } catch (e) {
     console.error('[dizinovelas] stream échoué', e.message);
-    debug.push(debugItem('erreur: ' + e.message.slice(0, 100)));
-  }
-
-  console.error('[dizinovelas] debug:', JSON.stringify(debug));
-
-  // Aucun flux lisible : lignes DEBUG (non lisibles, juste pour lire le titre)
-  if (DEBUG && !streams.length) {
-    debug.slice(-9).forEach((d, i) => {
-      streams.push({
-        name: `DEBUG ${i + 1}`,
-        title:
-          `${String(d.url).slice(0, 140)}\n` +
-          `taille: ${d.size} | mots: ${(d.hints || []).join(', ') || '-'}\n` +
-          `scripts: ${(d.hosts || []).join(', ') || '-'}\n` +
-          `${d.snippet || ''}`,
-        url: DEBUG_URL,
-      });
-    });
   }
   return streams;
 }
