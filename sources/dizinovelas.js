@@ -1,6 +1,6 @@
 // sources/dizinovelas.js
 // Source Dizinovelas (site WordPress, thème ZetaFlix) pour l'addon karma.
-// Catalogue + fiches de séries ; la lecture se fait dans le navigateur (lecteur chiffré).
+// Catalogue + fiches de séries ; tente de résoudre un lien direct, sinon lien navigateur.
 
 const tmdb = require('./tmdb');
 
@@ -95,7 +95,17 @@ async function catalog(extra = {}) {
   } else {
     url = p > 1 ? `${BASE}/series/page/${p}/` : `${BASE}/series/`;
   }
-  const items = parseList(await get(url));
+  let html;
+  try {
+    html = await get(url);
+  } catch (e) {
+    console.error('[dizinovelas] catalogue échoué', e.message);
+    return [];
+  }
+  const items = parseList(html);
+  if (!items.length) {
+    console.error('[dizinovelas] catalogue vide pour', url, '- taille page :', String(html).length);
+  }
   return items.map((i) => ({
     id: `dizinovelas:serie:${i.slug}`,
     type: 'series',
@@ -169,6 +179,7 @@ async function resolvePage(url, referer, depth = 0) {
   for (const m of html.matchAll(MEDIA_RE)) {
     out.push({ kind: 'direct', url: m[0].replace(/\\\//g, '/'), referer: url });
   }
+
   // 2) redirections JS ou iframes : on suit
   const next = [];
   const loc = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
@@ -235,3 +246,14 @@ async function stream(id, type) {
   streams.push({ name: 'Dizinovelas', title: 'Ouvrir dans le navigateur', externalUrl });
   return streams;
 }
+
+module.exports = {
+  prefix: 'dizinovelas:',
+  types: ['series'],
+  catalogId: 'dizinovelas',
+  catalogName: 'Dizinovelas',
+  genres: GENRES,
+  catalog,
+  meta,
+  stream,
+};
