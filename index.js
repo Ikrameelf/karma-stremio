@@ -19,6 +19,7 @@ const sources = [
   require('./sources/dulourd'),
   require('./sources/vidzy'),
   require('./sources/elisasaddictions'),
+  require('./sources/dizinovelas'),
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
@@ -28,7 +29,7 @@ const manifest = {
   id: 'community.karma.stremio.v2',
   version: '1.3.2',
   name: 'Karma',
-  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix).',
+  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas).',
   types: ['movie', 'series'],
   resources: [
     'catalog',
