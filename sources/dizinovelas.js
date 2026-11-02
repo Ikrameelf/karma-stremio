@@ -2,8 +2,16 @@
 // Source Dizinovelas (site WordPress, thème ZetaFlix) pour l'addon karma.
 // Catalogue + fiches de séries ; flux lisibles en interne uniquement (url directe ou P2P).
 // Pas d'externalUrl : sur Android TV il n'y a pas de navigateur et l'appli plante.
+//
+// DEBUG = true : si aucun flux lisible n'est trouvé, l'addon affiche des lignes
+// « DEBUG » dans Stremio dont le titre décrit les pages traversées par le lecteur.
+// Ces lignes ne se lisent pas (elles pointent vers une URL factice) : elles servent
+// seulement à lire le titre. Mettre DEBUG = false une fois le problème réglé.
 
 const tmdb = require('./tmdb');
+
+const DEBUG = true;
+const DEBUG_URL = 'https://karma-stremio.onrender.com/debug-dizinovelas';
 
 const BASE = 'https://www.dizinovelas.com';
 const UA =
@@ -171,11 +179,31 @@ async function meta(id) {
 const MEDIA_RE = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
 const MAGNET_RE = /magnet:\?xt=urn:btih:([a-fA-F0-9]{40})[^\s"'<>]*/gi;
 const IFRAME_RE = /<iframe[^>]+src=["']([^"']+)["']/gi;
+const HINT_RE =
+  /atob\(|eval\(|webtorrent|\.torrent|magnet:|infohash|p2p|\.m3u8|\.mp4|jwplayer|hls|aes|crypto|fetch\(|xmlhttprequest|\$\.ajax|sources\s*:|file\s*:/gi;
+
+// Résume une page pour le debug : mots-clés trouvés, hôtes des scripts, début du contenu
+function describePage(url, html) {
+  const hints = [...new Set([...html.matchAll(HINT_RE)].map((m) => m[0].toLowerCase()))].slice(0, 12);
+  const hosts = [
+    ...new Set(
+      [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map((m) => {
+        try {
+          return new URL(m[1], url).host;
+        } catch (e) {
+          return '?';
+        }
+      })
+    ),
+  ].slice(0, 6);
+  const snippet = html.replace(/\s+/g, ' ').slice(0, 220);
+  return { kind: 'page', url, hints, hosts, snippet, size: html.length };
+}
 
 async function resolvePage(url, referer, depth = 0) {
   if (depth > 3) return [];
   const html = await get(url, { referer });
-  const out = [{ kind: 'page', url }];
+  const out = [describePage(url, html)];
 
   // 1) liens médias directs dans la page
   for (const m of html.matchAll(MEDIA_RE)) {
@@ -199,7 +227,7 @@ async function resolvePage(url, referer, depth = 0) {
     try {
       out.push(...(await resolvePage(n, url, depth + 1)));
     } catch (e) {
-      out.push({ kind: 'page', url: n });
+      out.push({ kind: 'page', url: n, hints: ['erreur: ' + e.message.slice(0, 60)], hosts: [], snippet: '', size: 0 });
     }
   }
   return out;
@@ -211,13 +239,14 @@ async function stream(id, type) {
   const slug = parts.slice(2).join(':');
   const watch = `${BASE}/episodes/${slug}/watch/1/`;
   const streams = [];
+  const debug = [];
   try {
     const html = await get(watch);
+    debug.push(describePage(watch, html));
     const m = html.match(/src='(https:\/\/api\.chainnetv\.top\/series\.php[^']*web-player-2[^']*)'/);
     if (m) {
       const chain = m[1].replace(/&amp;/g, '&');
       const found = await resolvePage(chain, watch);
-      console.error('[dizinovelas] pages:', JSON.stringify(found.map((f) => f.url || f.hash)));
       const seen = new Set();
       for (const f of found) {
         const key = f.url || f.hash;
@@ -238,13 +267,34 @@ async function stream(id, type) {
             (t) => 'tracker:' + decodeURIComponent(t[1])
           );
           streams.push({ name: 'Dizinovelas', title: 'P2P', infoHash: f.hash, sources: trackers });
+        } else {
+          debug.push(f);
         }
       }
     } else {
+      debug.push({ kind: 'page', url: 'lecteur chainnetv introuvable', hints: [], hosts: [], snippet: '', size: 0 });
       console.error('[dizinovelas] lecteur chainnetv introuvable sur', watch);
     }
   } catch (e) {
     console.error('[dizinovelas] stream échoué', e.message);
+    debug.push({ kind: 'page', url: 'erreur: ' + e.message.slice(0, 100), hints: [], hosts: [], snippet: '', size: 0 });
+  }
+
+  console.error('[dizinovelas] debug:', JSON.stringify(debug));
+
+  // Aucun flux lisible : on affiche des lignes DEBUG (non lisibles, juste pour lire le titre)
+  if (DEBUG && !streams.length) {
+    debug.slice(0, 5).forEach((d, i) => {
+      streams.push({
+        name: `DEBUG ${i + 1}`,
+        title:
+          `${String(d.url).slice(0, 140)}\n` +
+          `taille: ${d.size} | mots: ${(d.hints || []).join(', ') || '-'}\n` +
+          `scripts: ${(d.hosts || []).join(', ') || '-'}\n` +
+          `${d.snippet || ''}`,
+        url: DEBUG_URL,
+      });
+    });
   }
   return streams;
 }
