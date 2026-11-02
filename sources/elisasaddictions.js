@@ -1,4 +1,5 @@
 ﻿// sources/elisasaddictions.js
+const tmdb = require('./tmdb');
 // Flux directs Elisa's Addictions (worker MP4) pour l'addon karma.
 // Les URLs directes sont publiques mais leur chemin (dossier/abreviation) varie par serie.
 // On les derive du nom de collection Wix (PascalCase) : dossier = nom avec espaces,
@@ -115,12 +116,13 @@ async function meta(id) {
       episode: n,
     });
   }
-  return {
+  const base = {
     id,
     type: 'series',
     name,
     videos,
   };
+  return tmdb.enrich(base);
 }
 
 async function stream(id, type) {
