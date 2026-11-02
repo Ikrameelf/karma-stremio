@@ -1,6 +1,7 @@
 // sources/dizinovelas.js
 // Source Dizinovelas (site WordPress, thème ZetaFlix) pour l'addon karma.
-// Catalogue + fiches de séries ; tente de résoudre un lien direct, sinon lien navigateur.
+// Catalogue + fiches de séries ; flux lisibles en interne uniquement (url directe ou P2P).
+// Pas d'externalUrl : sur Android TV il n'y a pas de navigateur et l'appli plante.
 
 const tmdb = require('./tmdb');
 
@@ -168,19 +169,25 @@ async function meta(id) {
 // ---------- flux ----------
 
 const MEDIA_RE = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
+const MAGNET_RE = /magnet:\?xt=urn:btih:([a-fA-F0-9]{40})[^\s"'<>]*/gi;
 const IFRAME_RE = /<iframe[^>]+src=["']([^"']+)["']/gi;
 
 async function resolvePage(url, referer, depth = 0) {
   if (depth > 3) return [];
   const html = await get(url, { referer });
-  const out = [];
+  const out = [{ kind: 'page', url }];
 
   // 1) liens médias directs dans la page
   for (const m of html.matchAll(MEDIA_RE)) {
     out.push({ kind: 'direct', url: m[0].replace(/\\\//g, '/'), referer: url });
   }
 
-  // 2) redirections JS ou iframes : on suit
+  // 2) liens magnet (P2P)
+  for (const m of html.matchAll(MAGNET_RE)) {
+    out.push({ kind: 'magnet', hash: m[1].toLowerCase(), magnet: m[0] });
+  }
+
+  // 3) redirections JS ou iframes : on suit
   const next = [];
   const loc = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
   if (loc) next.push(loc[1]);
@@ -190,10 +197,9 @@ async function resolvePage(url, referer, depth = 0) {
     if (n.startsWith('//')) n = 'https:' + n;
     if (!/^https?:/.test(n)) continue;
     try {
-      out.push({ kind: 'page', url: n });
       out.push(...(await resolvePage(n, url, depth + 1)));
     } catch (e) {
-      /* on ignore */
+      out.push({ kind: 'page', url: n });
     }
   }
   return out;
@@ -204,22 +210,19 @@ async function stream(id, type) {
   if (parts.length < 3 || parts[1] !== 'ep') return [];
   const slug = parts.slice(2).join(':');
   const watch = `${BASE}/episodes/${slug}/watch/1/`;
-  let externalUrl = watch;
   const streams = [];
   try {
     const html = await get(watch);
     const m = html.match(/src='(https:\/\/api\.chainnetv\.top\/series\.php[^']*web-player-2[^']*)'/);
     if (m) {
       const chain = m[1].replace(/&amp;/g, '&');
-      const page = await get(chain, { referer: watch });
-      const mm = page.match(/window\.location\.href="([^"]+)"/);
-      if (mm) externalUrl = mm[1];
-
       const found = await resolvePage(chain, watch);
+      console.error('[dizinovelas] pages:', JSON.stringify(found.map((f) => f.url || f.hash)));
       const seen = new Set();
       for (const f of found) {
-        if (seen.has(f.url)) continue;
-        seen.add(f.url);
+        const key = f.url || f.hash;
+        if (seen.has(key)) continue;
+        seen.add(key);
         if (f.kind === 'direct') {
           streams.push({
             name: 'Dizinovelas',
@@ -230,20 +233,19 @@ async function stream(id, type) {
               proxyHeaders: { request: { Referer: f.referer, 'User-Agent': UA } },
             },
           });
-        } else {
-          // DEBUG : affiche les pages traversées pour voir l'hébergeur
-          streams.push({
-            name: 'Dizinovelas (debug)',
-            title: f.url.slice(0, 120),
-            externalUrl: f.url,
-          });
+        } else if (f.kind === 'magnet') {
+          const trackers = [...f.magnet.matchAll(/[?&]tr=([^&]+)/g)].map(
+            (t) => 'tracker:' + decodeURIComponent(t[1])
+          );
+          streams.push({ name: 'Dizinovelas', title: 'P2P', infoHash: f.hash, sources: trackers });
         }
       }
+    } else {
+      console.error('[dizinovelas] lecteur chainnetv introuvable sur', watch);
     }
   } catch (e) {
     console.error('[dizinovelas] stream échoué', e.message);
   }
-  streams.push({ name: 'Dizinovelas', title: 'Ouvrir dans le navigateur', externalUrl });
   return streams;
 }
 
