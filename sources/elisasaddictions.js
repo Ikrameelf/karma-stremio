@@ -146,6 +146,52 @@ function buildStreamUrl(prefix, collection, epNum) {
 // ---------- Fetcher Wix (liens externes) ----------
 const zlib = require('zlib');
 
+// ---------- Login automatique Wix (optionnel) ----------
+const ELISA_EMAIL = (process.env.ELISA_EMAIL || '').trim();
+const ELISA_PASSWORD = (process.env.ELISA_PASSWORD || '').trim();
+
+async function wixLogin() {
+  if (!ELISA_EMAIL || !ELISA_PASSWORD) return null;
+  // Tentative 1 : API members
+  try {
+    const res = await fetch('https://www.elisasaddictions.fr/_api/members/v1/members/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: ELISA_EMAIL, password: ELISA_PASSWORD }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const token = data.token || data.accessToken || data.sessionToken || data.authorization;
+      if (token) { console.log('[elisa] login OK (members)'); return token; }
+    }
+  } catch (e) { console.log('[elisa] login members erreur:', e.message); }
+  // Tentative 2 : API auth (si disponible)
+  try {
+    const res = await fetch('https://www.elisasaddictions.fr/_api/wix-sm-webapp/v1/members/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: ELISA_EMAIL, password: ELISA_PASSWORD }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const token = data.token || data.accessToken || data.sessionToken || data.authorization;
+      if (token) { console.log('[elisa] login OK (sm-webapp)'); return token; }
+    }
+  } catch (e) { console.log('[elisa] login sm-webapp erreur:', e.message); }
+  console.log('[elisa] login échoué');
+  return null;
+}
+
+// Rafraîchissement automatique du token toutes les 3 heures
+let _authToken = (process.env.ELISA_AUTH || '').trim();
+if (ELISA_EMAIL && ELISA_PASSWORD) {
+  wixLogin().then((t) => { if (t) _authToken = t; });
+  setInterval(async () => {
+    const t = await wixLogin();
+    if (t) _authToken = t;
+  }, 3 * 60 * 60 * 1000);
+}
+
 function buildR(prefix, epSlug) {
   const cfg = CONFIG[prefix];
   if (!cfg) return null;
@@ -178,7 +224,7 @@ function extractLinks(node, out) {
 }
 
 async function wixFetch(prefix, epNum) {
-  const auth = (process.env.ELISA_AUTH || '').trim();
+  const auth = (_authToken || process.env.ELISA_AUTH || '').trim();
   const xsrf = (process.env.ELISA_XSRF || '').trim();
   const cookies = (process.env.ELISA_COOKIES || '').trim();
   if (!auth || !xsrf || !cookies) return [];
