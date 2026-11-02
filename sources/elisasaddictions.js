@@ -5,11 +5,18 @@ const BASE = 'https://www.elisasaddictions.fr';
 const INDEXES = [
   '/dizis-index/dizisdeaaz',
   '/dizis-index/diziscomplets',
-  '/dizis-index/rom-com',
-  '/dizis-index/dramas',
-  '/dizis-index/historique',
-  '/dizis-index/fantastique',
-  '/dramas',
+  '/dizis-index/dizisromcom',
+  '/dizis-index/dizisdramas',
+  '/dizis-index/dizishistorique',
+  '/dizis-index/dizisfantastique',
+  '/forest',
+  '/kluen-cheewit',
+  '/leh-lub-salub-rarng',
+  '/likit-ruk',
+  '/miss-in-kiss',
+  '/my-girl',
+  '/secret-garden',
+  '/the-rising-sun',
 ];
 const http = axios.create({
   timeout: 15000,
