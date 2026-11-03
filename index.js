@@ -21,6 +21,7 @@ const sources = [
   require('./sources/elisasaddictions'),
   require('./sources/dizinovelas'),
   require('./sources/animesama'),
+  require('./sources/viki'),
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
@@ -28,9 +29,9 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.4.0',
+  version: '1.5.0',
   name: 'Karma',
-  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas, Anime-Sama).',
+  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas, Anime-Sama, Viki).',
   types: ['movie', 'series'],
   resources: [
     'catalog',
@@ -42,7 +43,13 @@ const manifest = {
     type: s.types[0],
     id: s.catalogId,
     name: s.catalogName,
-    extra: [{ name: 'genre', options: s.genres }, { name: 'search' }, { name: 'skip' }],
+    extra: [
+      ...(Array.isArray(s.genres) && s.genres.length
+        ? [{ name: 'genre', options: s.genres }]
+        : []),
+      { name: 'search' },
+      { name: 'skip' },
+    ],
   })),
 };
 
