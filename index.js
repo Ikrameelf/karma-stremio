@@ -20,6 +20,7 @@ const sources = [
   require('./sources/vidzy'),
   require('./sources/elisasaddictions'),
   require('./sources/dizinovelas'),
+  require('./sources/animesama'),
 ];
 const withCatalog = sources.filter((s) => s.catalog);
 const withMeta = sources.filter((s) => s.meta);
@@ -27,9 +28,9 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.3.2',
+  version: '1.4.0',
   name: 'Karma',
-  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas).',
+  description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas, Anime-Sama).',
   types: ['movie', 'series'],
   resources: [
     'catalog',
@@ -237,6 +238,7 @@ app.get('/dbg', async (req, res) => {
 app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
 require('./sources/voirdrama').registerDebug(app);
 require('./sources/coflix').registerDebug(app);
+require('./sources/animesama').registerDebug(app);
 
 // Page de diagnostic : ouvrez /debug dans un navigateur pour voir l'état de l'addon.
 app.get('/debug', async (req, res) => {
