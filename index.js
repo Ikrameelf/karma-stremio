@@ -29,7 +29,7 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.5.1',
+  version: '1.5.2',
   name: 'Karma',
   description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas, Anime-Sama, Viki).',
   types: ['movie', 'series'],
@@ -304,6 +304,9 @@ app.get('/dbg', async (req, res) => {
 });
 
 app.get('/proxy/:u/:h/:sig/:name', proxy.handler);
+// Playlist HLS de sous-titres : certains masters (Movix/Purstream) pointent
+// directement vers des .vtt, ce que les lecteurs HLS ne savent pas lire.
+app.get('/subs/:u/:h/:sig/:name', proxy.subtitleHandler);
 require('./sources/voirdrama').registerDebug(app);
 require('./sources/coflix').registerDebug(app);
 require('./sources/animesama').registerDebug(app);
