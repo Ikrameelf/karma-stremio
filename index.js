@@ -29,7 +29,7 @@ const allPrefixes = [...new Set(sources.map((s) => s.prefix))];
 
 const manifest = {
   id: 'community.karma.stremio.v2',
-  version: '1.5.0',
+  version: '1.5.1',
   name: 'Karma',
   description: 'Port Stremio de providers Cs-Karma (YoTurkish, Movix, Coflix, Dizinovelas, Anime-Sama, Viki).',
   types: ['movie', 'series'],
@@ -88,7 +88,13 @@ function collectStreams(type, id) {
   if (hit) streamCache.delete(key);
 
   const p = (async () => {
-    const list = sources.filter((s) => id.startsWith(s.prefix));
+    // Les sources à préfixe non-IMDb (YoTurkish) savent aussi résoudre un ID
+    // IMDb quand leur fiche a été ouverte : sans ça, flux et sous-titres
+    // disparaissent pour les épisodes identifiés en tt....
+    const list = sources.filter((s) =>
+      id.startsWith(s.prefix) ||
+      (s.handlesImdb && String(id).startsWith('tt'))
+    );
 
     const results = await Promise.allSettled(
       list.map(async (s) => {
@@ -164,17 +170,53 @@ function collectStreams(type, id) {
 
 builder.defineStreamHandler(async ({ type, id }) => ({ streams: await collectStreams(type, id) }));
 
-// Sous-titres : on reprend ceux que les sources attachent à leurs flux (champ "subtitles").
+// Les lecteurs attendent majoritairement un code ISO 639-1 (fr, en...).
+// On convertit les codes ISO 639-2 que certaines sources renvoient encore.
+const LANG2 = {
+  fre: 'fr', fra: 'fr', eng: 'en', spa: 'es', ara: 'ar', tur: 'tr',
+  deu: 'de', ger: 'de', ita: 'it', rus: 'ru', por: 'pt',
+};
+const normalizeLang = (lang) => {
+  const code = String(lang || '').toLowerCase();
+  return LANG2[code] || code || 'fr';
+};
+
+// Cache serveur : Stremio/Nuvio redemandent les mêmes sous-titres après un
+// redémarrage de lecture. On évite de refaire tous les appels aux sources.
+const subtitlesCache = new Map();
+
+// Sous-titres : on reprend ceux que les sources attachent à leurs flux, puis
+// on interroge directement les sources qui savent fournir des sous-titres si
+// l'extraction des flux n'a rien donné.
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log('[SUBTITLES] Requête reçue :', { type, id });
+
+  const cacheKey = `${type}:${id}`;
+  const hit = subtitlesCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < hit.ttl) {
+    console.log('[SUBTITLES] Cache :', cacheKey, hit.subtitles.length);
+    return { subtitles: hit.subtitles, cacheMaxAge: 300 };
+  }
+
+  const seen = new Set();
+  const subtitles = [];
+
+  const add = (sub) => {
+    if (!sub || !sub.url) return;
+    const url = String(sub.url);
+    if (seen.has(url)) return;
+    seen.add(url);
+    subtitles.push({
+      id: String(sub.id || `karma-${subtitles.length}`),
+      url,
+      lang: normalizeLang(sub.lang),
+    });
+  };
 
   try {
     const streams = await collectStreams(type, id);
 
     console.log('[SUBTITLES] Flux récupérés :', streams.length);
-
-    const seen = new Set();
-    const subtitles = [];
 
     streams.forEach((stream, index) => {
       console.log('[SUBTITLES] Flux', index, {
@@ -184,28 +226,47 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
         subtitleCount: (stream.subtitles || []).length
       });
 
-      (stream.subtitles || []).forEach((sub) => {
-        if (!sub?.url || seen.has(sub.url)) return;
-
-        seen.add(sub.url);
-
-        subtitles.push({
-          id: String(sub.id || `karma-${subtitles.length}`),
-          url: sub.url,
-          lang: !sub.lang || sub.lang === 'fr'
-            ? 'fre'
-            : sub.lang
-        });
-      });
+      (stream.subtitles || []).forEach(add);
     });
-
-    console.log('[SUBTITLES] Résultat :', subtitles.length);
-
-    return { subtitles };
   } catch (e) {
-    console.error('[SUBTITLES] Erreur :', e.stack || e);
-    return { subtitles: [] };
+    console.error('[SUBTITLES] Erreur flux :', e.stack || e);
   }
+
+  // Repli direct (ex. TurkVOST) : les VTT peuvent être disponibles même si
+  // l'extraction du flux MP4 a échoué ou dépassé le délai de 25 s.
+  if (!subtitles.length) {
+    const providers = sources.filter((s) =>
+      typeof s.subtitles === 'function' &&
+      (String(id).startsWith(s.prefix) ||
+        (s.handlesImdb && String(id).startsWith('tt')))
+    );
+
+    const results = await Promise.allSettled(
+      providers.map((s) => s.subtitles(id, type))
+    );
+
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') (r.value || []).forEach(add);
+      else console.error('[SUBTITLES]', providers[i].prefix, r.reason?.message || r.reason);
+    });
+  }
+
+  console.log('[SUBTITLES] Résultat :', subtitles.length);
+
+  subtitlesCache.set(cacheKey, {
+    at: Date.now(),
+    // Un résultat vide est recaché brièvement pour laisser sa chance à un
+    // nouvel essai (site temporairement indisponible, rate limit...).
+    ttl: subtitles.length ? 10 * 60 * 1000 : 60 * 1000,
+    subtitles,
+  });
+  if (subtitlesCache.size > 300) {
+    for (const [k, v] of subtitlesCache) {
+      if (Date.now() - v.at > v.ttl) subtitlesCache.delete(k);
+    }
+  }
+
+  return { subtitles, cacheMaxAge: 300 };
 });
 
 // Route temporaire : /dbg?u=<url coflix>&q=<regex>&m=POST affiche le code d'une page (ou les passages qui correspondent).

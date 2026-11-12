@@ -175,51 +175,58 @@ async function collectWithBrowser(url) {
   }
 }
 
-async function stream(id) {
-  // Compatibilité : deux formats d'identifiants d'épisode ont existé.
-  //   - "yot:ep:<epEnc>:<sérieEnc>:<n>"   (format actuel)
-  //   - "yot:ep:<epEnc>.<extraEnc>"        (ancien format, extraEnc = base64("nom|n"))
-  // Nuvio (et Stremio) peuvent encore détenir des identifiants de l'ancien format :
-  // on les accepte tous les deux pour ne jamais perdre les liens.
-  if (!id) return [];
+// Compatibilité : deux formats d'identifiants d'épisode ont existé.
+//   - "yot2:ep:<epEnc>:<sérieEnc>:<n>"   (format actuel)
+//   - "yot2:ep:<epEnc>.<extraEnc>"        (ancien format, extraEnc = base64("nom|n"))
+// Nuvio (et Stremio) peuvent encore détenir des identifiants de l'ancien format :
+// on les accepte tous les deux pour ne jamais perdre les liens.
+// IDs IMDb (tt...) : on retrouve le chemin YoTurkish via les maps peuplées par meta().
+function resolveEpisode(id) {
+  if (!id) return null;
   let epPath = null, seriesPath = null, epNum = null;
-  // IDs IMDb (tt...) : on retrouve le chemin YoTurkish via les maps peuplées par meta().
   if (String(id).startsWith('tt')) {
     const parts = String(id).split(':');
     const imdbId = parts[0];
     epNum = parseInt(parts[2], 10) || null;
     epPath = episodeMap.get(String(id));
-    if (!epPath) return [];
+    if (!epPath) return null;
     seriesPath = imdbToPath.get(imdbId) || null;
   } else if (String(id).startsWith('yot2:ep:')) {
-  const rest = String(id).slice('yot2:ep:'.length);
-  try {
-    if (rest.includes(':')) {
-      const parts = rest.split(':');
-      epPath = dec(parts[0]);
-      if (parts[1]) seriesPath = dec(parts[1]);
-      if (parts[2]) epNum = parseInt(parts[2], 10) || null;
-    } else if (rest.includes('.')) {
-      const dot = rest.indexOf('.');
-      epPath = dec(rest.slice(0, dot));
-      const raw = dec(rest.slice(dot + 1));
-      const cut = raw.lastIndexOf('|');
-      if (cut > 0) {
-        const name = raw.slice(0, cut);
-        epNum = parseInt(raw.slice(cut + 1), 10) || null;
-        // On reconstruit un chemin de série pour que YouTube et TurkVOST puissent
-        // encore fonctionner avec les anciens identifiants.
-        seriesPath = '/' + name + '/';
+    const rest = String(id).slice('yot2:ep:'.length);
+    try {
+      if (rest.includes(':')) {
+        const parts = rest.split(':');
+        epPath = dec(parts[0]);
+        if (parts[1]) seriesPath = dec(parts[1]);
+        if (parts[2]) epNum = parseInt(parts[2], 10) || null;
+      } else if (rest.includes('.')) {
+        const dot = rest.indexOf('.');
+        epPath = dec(rest.slice(0, dot));
+        const raw = dec(rest.slice(dot + 1));
+        const cut = raw.lastIndexOf('|');
+        if (cut > 0) {
+          const name = raw.slice(0, cut);
+          epNum = parseInt(raw.slice(cut + 1), 10) || null;
+          // On reconstruit un chemin de série pour que YouTube et TurkVOST puissent
+          // encore fonctionner avec les anciens identifiants.
+          seriesPath = '/' + name + '/';
+        }
+      } else {
+        epPath = dec(rest);
       }
-    } else {
-      epPath = dec(rest);
+    } catch (e) {
+      console.log(`YoTurkish id illisible (${id}) : ${e.message}`);
+      return null;
     }
-  } catch (e) {
-    console.log(`YoTurkish id illisible (${id}) : ${e.message}`);
-    return [];
   }
-  } // fin else if yot:ep:
-  if (!epPath) return [];
+  if (!epPath) return null;
+  return { epPath, seriesPath, epNum };
+}
+
+async function stream(id) {
+  const episode = resolveEpisode(id);
+  if (!episode) return [];
+  const { epPath, seriesPath, epNum } = episode;
   const epUrl = BASE + epPath;
   let html;
   try {
@@ -260,11 +267,10 @@ async function stream(id) {
     console.log('TurkVOST :', e.message);
   }
 
-  // Les sous-titres TurkVOST (VTT) sont aussi utiles pour les liens YouTube,
-  // dont le lecteur interne n'affiche pas d'icône de sous-titres par défaut.
+  // Sous-titres TurkVOST (VTT) communs à tous les flux directs de l'épisode.
+  // On ne les attache pas aux flux YouTube : leur lecteur intégré ignore les
+  // pistes externes, ce qui donne l'impression qu'elles ne s'affichent pas.
   const turkvostSubs = turkvostStreams.flatMap((s) => s.subtitles || []);
-  // Les sous-titres TurkVOST ne sont attachés qu'au flux MP4 direct,
-  // car le lecteur YouTube de Nuvio ne supporte pas les sous-titres externes.
   const seen = new Set();
   for (const url of candidates) {
     if (seen.has(url)) continue;
@@ -284,10 +290,25 @@ async function stream(id) {
     }));
     else streams.push({ name: 'YoTurkish', title: 'Ouvrir dans le navigateur', externalUrl: url });
   }
+  // Les sous-titres TurkVOST sont attachés à chaque flux direct (MP4/HLS),
+  // pas seulement au MP4 TurkVOST : ainsi, quel que soit le lecteur direct
+  // choisi, la piste est disponible dans le menu du lecteur.
+  if (turkvostSubs.length) {
+    for (const s of streams) {
+      if (s.url && !(Array.isArray(s.subtitles) && s.subtitles.length)) {
+        s.subtitles = turkvostSubs;
+      }
+    }
+  }
   console.log(`YoTurkish ${epUrl} : ${candidates.length} lecteur(s) trouvé(s), ${streams.filter((x) => x.ytId).length} YouTube, ${streams.filter((x) => x.url).length} direct(s), ${streams.filter((x) => x.externalUrl).length} navigateur`);
   const ytLinks = streams.filter((x) => x.ytId);
   const directLinks = streams.filter((x) => x.url);
   const browserLinks = streams.filter((x) => x.externalUrl);
+  if (turkvostSubs.length) {
+    // Le lecteur YouTube ne peut pas afficher les sous-titres externes :
+    // on le signale pour guider vers le flux direct sous-titré.
+    for (const s of ytLinks) s.title = `${s.title} — sans sous-titres`;
+  }
   // YouTube et liens directs toujours affichés ; les liens "navigateur" uniquement si SHOW_BROWSER_LINKS est défini.
   // Nuvio (et d'autres clients) n'affichent parfois aucun lien si seuls les liens
   // "navigateur" sont disponibles et qu'ils sont masqués par défaut : on les garde
@@ -295,10 +316,28 @@ async function stream(id) {
   // HIDE_BROWSER_LINKS est défini.
   const hideBrowser = process.env.HIDE_BROWSER_LINKS && !process.env.SHOW_BROWSER_LINKS;
   const showBrowser = !!process.env.SHOW_BROWSER_LINKS || (ytLinks.length === 0 && directLinks.length === 0);
-  const out = [...ytLinks, ...directLinks, ...(hideBrowser ? [] : (showBrowser ? browserLinks : []))];
+  // Le flux direct sous-titré passe en premier : c'est le seul qui affiche
+  // réellement les sous-titres dans Stremio/Nuvio. Les flux YouTube restent
+  // disponibles juste après.
+  const subtitledLinks = directLinks.filter((x) => Array.isArray(x.subtitles) && x.subtitles.length);
+  const plainDirectLinks = directLinks.filter((x) => !(Array.isArray(x.subtitles) && x.subtitles.length));
+  const out = [...subtitledLinks, ...ytLinks, ...plainDirectLinks, ...(hideBrowser ? [] : (showBrowser ? browserLinks : []))];
   // Diagnostic : affiche les URLs réellement renvoyées (proxy Render ou direct).
   console.log('[yot] URLs renvoyées :', out.map((x) => x.url || x.externalUrl || ('yt:' + x.ytId)));
   return out;
+}
+
+// Handler /subtitles : récupère les VTT directement depuis TurkVOST, sans
+// dépendre de l'extraction des flux (qui peut échouer ou dépasser le délai).
+async function subtitles(id) {
+  const episode = resolveEpisode(id);
+  if (!episode || !episode.seriesPath || !episode.epNum) return [];
+  try {
+    return await turkvost.findSubtitles(episode.seriesPath, episode.epNum);
+  } catch (e) {
+    console.log('YoTurkish sous-titres :', e.message);
+    return [];
+  }
 }
 
 module.exports = {
@@ -307,5 +346,7 @@ module.exports = {
   catalogName: 'YoTurkish 2',
   types: ['series'],
   genres: Object.keys(GENRES),
-  catalog, meta, stream,
+  catalog, meta, stream, subtitles,
+  // Permet à index.js d'appeler cette source pour les IDs IMDb (tt...).
+  handlesImdb: true,
 };

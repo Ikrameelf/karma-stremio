@@ -1,13 +1,14 @@
 // Flux TurkVOST (avec sous-titres) pour les épisodes YoTurkish.
 // Version diagnostic : chaque abandon est maintenant écrit dans les logs, et un échec réseau n'est plus mis en cache.
+const crypto = require('crypto');
 const axios = require('axios');
-const { playable, proxyUrl } = require('./proxy');
 
 const BASE = 'https://turkvost.fr';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const http = axios.create({ timeout: 15000, headers: { 'User-Agent': UA, Referer: BASE + '/' } });
 const MP4_RE = /https?:\/\/videos\.turkvost\.fr\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*/i;
-const LANG3 = { fr: 'fra', en: 'eng', es: 'spa', ar: 'ara', tr: 'tur', de: 'deu', it: 'ita' };
+// Stremio, Nuvio et les lecteurs Android utilisent plus volontiers les codes ISO 639-1.
+const LANG2 = { fr: 'fr', en: 'en', es: 'es', ar: 'ar', tr: 'tr', de: 'de', it: 'it', ru: 'ru', pt: 'pt' };
 const HEADERS = { Referer: BASE + '/', Origin: BASE, 'User-Agent': UA };
 
 const slugify = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -102,12 +103,35 @@ function parseSubtitles(html) {
     .filter((t) => t && t.src && t.srclang)
     .map((t) => {
       const url = new URL(t.src, BASE).href;
+      // Identifiant unique par fichier : évite qu'un lecteur réutilise le
+      // sous-titre d'un autre épisode qui porterait le même id (turkvost-fr).
+      const key = crypto.createHash('sha1').update(url).digest('hex').slice(0, 10);
       return {
-        id: `turkvost-${t.srclang}`,
-        lang: LANG3[t.srclang] || t.srclang,
-        url: proxyUrl(url, HEADERS) || url,
+        id: `turkvost-${t.srclang}-${key}`,
+        lang: LANG2[String(t.srclang).toLowerCase()] || t.srclang,
+        // URL directe du CDN TurkVOST : CORS *, aucun Referer requis et pas de
+        // réveil du service Render (source de délais et d'échecs silencieux).
+        url,
       };
     });
+}
+
+// Récupère uniquement les sous-titres d'un épisode. Utilisé en repli par le
+// handler /subtitles quand l'extraction des flux n'a rien renvoyé.
+async function findSubtitles(seriesPath, epNum) {
+  if (!seriesPath || !epNum) return [];
+  const slug = await findSlug(seriesPath);
+  if (!slug) return [];
+  const epUrl = `${BASE}/serie/${slug}/episode-${epNum}-vostfr`;
+  try {
+    const html = (await http.get(epUrl, { responseType: 'text' })).data;
+    const subtitles = parseSubtitles(html);
+    console.log(`TurkVOST ${epUrl} : ${subtitles.length} sous-titre(s) (repli)`);
+    return subtitles;
+  } catch (e) {
+    console.log(`TurkVOST sous-titres ${epUrl} : ${e.response ? 'HTTP ' + e.response.status : e.message}`);
+    return [];
+  }
 }
 
 async function findStreams(seriesPath, epNum) {
@@ -136,7 +160,7 @@ async function findStreams(seriesPath, epNum) {
   // et on transmet les headers nécessaires au lecteur via proxyHeaders.
   const stream = {
     name: 'TurkVOST',
-    title: 'TurkVOST VOSTFR (MP4)',
+    title: 'VOSTFR + sous-titres (MP4)',
     url,
     behaviorHints: { notWebReady: true, proxyHeaders: { request: HEADERS } },
   };
@@ -146,4 +170,4 @@ async function findStreams(seriesPath, epNum) {
   return [stream];
 }
 
-module.exports = { findStreams };
+module.exports = { findStreams, findSubtitles };
